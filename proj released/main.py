@@ -267,6 +267,87 @@ def handler6(chrome_page_render: ChromePageRender, document: HTMLDocument, url_n
     return None
 
 
+def handler10_nsd(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    # Beijing University NSD (观点) list handler
+    if len(url_info['URLs']) <= 0:
+        return None
+    urls_contents = {}
+    for url in url_info['URLs']:
+        try:
+            content = None
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=url,
+                selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+                waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+                print_error_log_to_console=True
+            )
+            if not is_timeout:
+                content = chrome_page_render.get_page_source()
+        except Exception:
+            content = None
+        urls_contents[url] = content
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=url_info['URLs'][0]):
+                HTMLTags.h2(url_name)
+            for (base_url, html_content) in urls_contents.items():
+                if html_content is None:
+                    continue
+                soup = BeautifulSoup(html_content, 'html.parser')
+                li_nodes = []
+                candidate_selectors = [
+                    'div.maincontent ul.captions li',
+                    'ul.captions li',
+                    'div.container ul.list li',
+                    'div.con_main ul.list li',
+                    'div.con-left ul.list li',
+                    'ul.list li',
+                    'div.list ul li'
+                ]
+                for sel in candidate_selectors:
+                    li_nodes = soup.select(sel)
+                    if li_nodes:
+                        break
+                # fallback: try any li that contains an anchor under main content
+                if not li_nodes:
+                    try:
+                        main_container = soup.select_one('div.wrapper') or soup.select_one('div.container') or soup
+                        li_nodes = [li for li in main_container.select('li') if li.select_one('a')]
+                    except Exception:
+                        li_nodes = []
+                for old_li in li_nodes:
+                    # NSD 结构：li > div.caption > h4.title > a
+                    old_a = old_li.select_one('h4.title a') or old_li.select_one('a')
+                    if old_a is None or not old_a.get('href'):
+                        continue
+                    a_href = url_join(base_url, old_a.get('href'))
+                    # 仅保留观点栏目常见的详情链接（站内 /info/ 或微信外链）
+                    href_l = a_href.lower()
+                    if not (('mp.weixin.qq.com' in href_l) or ('/info/' in href_l)):
+                        continue
+                    # title text: prefer attribute title then text
+                    h3_text = (old_a.get('title') or old_a.get_text(strip=True) or '').strip()
+                    # date text: common span/em/time; fallback by regex inside li text
+                    span_node = old_li.select_one('span.date') or old_li.select_one('span') or old_li.select_one('em') or old_li.select_one('time')
+                    span_text_raw = span_node.get_text(strip=True) if span_node is not None else ''
+                    m = re.search(r'(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})', span_text_raw)
+                    if m:
+                        span_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    else:
+                        # try to extract from li text if span missing
+                        text_all = old_li.get_text(" ", strip=True)
+                        m2 = re.search(r'(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})', text_all)
+                        span_text = (
+                            f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+                            if m2 else ''
+                        )
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(h3_text)
+                            HTMLTags.span(span_text)
+    return None
+
 def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     # this function adds <site_name> and <site_urls_contents> into <document> in an elegant way
     if len(url_info['URLs']) <= 0:
@@ -440,6 +521,21 @@ URLData = {
         'WaitingTimeLimitInSeconds': 30,
         'LogoPath': './Logos/handler1.jpg',
         'HTMLContentHandler': handler1
+    },
+    '北京大学国家发展研究院（观点）': {
+        'URLs': [
+            'https://nsd.pku.edu.cn/sylm/gd/index.htm',
+            'https://nsd.pku.edu.cn/sylm/gd/index1.htm',
+            'https://nsd.pku.edu.cn/sylm/gd/index2.htm',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.wrapper'),
+            ('css', 'div.container'),
+            ('css', 'ul.list'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler9.png',
+        'HTMLContentHandler': handler10_nsd
     },
     '中国国际工程咨询有限公司（中咨视界）': {
         'URLs': [
