@@ -1,4 +1,4 @@
-import json
+﻿import json
 from bs4 import BeautifulSoup
 import requests
 from datetime import datetime
@@ -6,6 +6,9 @@ from requests.exceptions import RequestException
 import time
 import re
 from urllib.parse import urljoin as url_join
+
+# 明确禁用系统代理，避免 HTTPS 站点走到失效代理
+NO_PROXIES = {"http": None, "https": None}
 
 # ------------------------------ 通用工具函数与回退提取 ------------------------------
 
@@ -61,6 +64,48 @@ def generic_content_by_candidates(soup: BeautifulSoup) -> str:
             max_len = tlen
             max_text = text
     return clean_text(max_text)
+
+# ------------------------------ 去重与缓存工具函数 ------------------------------
+def normalize_url(u: str) -> str:
+    """对 URL 做轻量规范化：去首尾空格，scheme/host 小写，去掉 fragment。"""
+    try:
+        from urllib.parse import urlparse, urlunparse
+        u = (u or '').strip()
+        parts = urlparse(u)
+        if not parts.scheme:
+            # 对于相对地址或空值，原样返回（上游基本已做绝对化）
+            return u
+        norm = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), fragment='')
+        return urlunparse(norm)
+    except Exception:
+        return u or ''
+
+
+def load_existing_results(json_path: str):
+    """
+    加载已有的抓取结果，返回 (items_list, seen_url_set)。
+    - items_list: List[dict]
+    - seen_url_set: Set[str]，保存规范化后的 URL，用于跳过已抓取内容
+    读取失败时返回空列表与空集合。
+    """
+    items = []
+    seen = set()
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                items = data
+                for it in data:
+                    try:
+                        u = normalize_url(it.get('url', ''))
+                        if u:
+                            seen.add(u)
+                    except Exception:
+                        continue
+    except Exception:
+        # 无已有文件或解析失败，忽略
+        pass
+    return items, seen
 
 def parse_ciecc_article(soup, url, publish_date):
     """解析中国国际工程咨询有限公司的文章"""
@@ -483,12 +528,134 @@ def parse_cdi_article(soup, url, publish_date):
         print(f"解析综合开发研究院页面 {url} 失败: {e}")
         return None
 
+def parse_wechat_article(soup, url, publish_date):
+    """解析微信文章（mp.weixin.qq.com）"""
+    try:
+        def norm_date_from_ct(ct_val: str) -> str:
+            try:
+                import datetime
+                ts = int(ct_val)
+                dt = datetime.datetime.fromtimestamp(ts)
+                return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+            except Exception:
+                return ''
+
+        # 标题
+        title_node = (
+            soup.select_one('h1#activity-name') or
+            soup.select_one('h1.rich_media_title') or
+            soup.select_one('meta[property="og:title"][content]')
+        )
+        title = ''
+        if title_node:
+            if getattr(title_node, 'name', '') == 'meta' and title_node.get('content'):
+                title = clean_text(title_node['content'])
+            else:
+                title = clean_text(title_node.get_text())
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+
+        # 正文
+        content_node = soup.select_one('#js_content') or soup.select_one('div#js_content')
+        content = clean_text(content_node.get_text("\n")) if content_node else generic_content_by_candidates(soup)
+
+        # 发表日期
+        pub_node = soup.select_one('#publish_time') or soup.select_one('span#publish_time')
+        pub = clean_text(pub_node.get_text()) if pub_node else ''
+        if not pub:
+            # 部分页面在脚本变量中存放 ct（秒级时间戳）
+            for sc in soup.find_all('script'):
+                txt = sc.get_text() or ''
+                m = re.search(r"var\s+ct\s*=\s*\"(\d+)\"", txt)
+                if m:
+                    pub = norm_date_from_ct(m.group(1))
+                    break
+        if not pub:
+            # meta 兜底
+            meta_pub = soup.select_one('meta[property="og:release_date"][content]')
+            if meta_pub and meta_pub.get('content'):
+                pub = clean_text(meta_pub['content'])
+        if not pub:
+            pub = publish_date or ''
+
+        if not title or not content:
+            print(f"微信文章解析失败，标题或内容为空: {url}")
+            return None
+
+        data = {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': '北京大学国家发展研究院',
+            'thinkank_name': '北京大学国家发展研究院',
+            'summary': '',
+            'content': content,
+            'attachments': '',
+            'crawl_date': get_current_date()
+        }
+        return data
+    except Exception as e:
+        print(f"解析微信页面 {url} 失败: {e}")
+        return None
+
+def parse_nsd_article(soup, url, publish_date):
+    """解析北京大学国家发展研究院站内文章"""
+    try:
+        # 标题候选
+        title_selectors = [
+            'h1', '.title h1', '.article-title', '.arti_title', '.wp_article_title', '.news-title'
+        ]
+        content_selectors = [
+            '.TRS_Editor', '.v_news_content', '.wp_articlecontent', '.article-content', '.content', '#content', '.text', '.read'
+        ]
+        title = ''
+        for sel in title_selectors:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                title = clean_text(node.get_text())
+                break
+        content = ''
+        for sel in content_selectors:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                break
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"NSD文章解析失败，标题或内容为空: {url}")
+            return None
+        data = {
+            'title': title,
+            'url': url,
+            'publish_date': publish_date,
+            'authors': '北京大学国家发展研究院',
+            'thinkank_name': '北京大学国家发展研究院',
+            'summary': '',
+            'content': content,
+            'attachments': '',
+            'crawl_date': get_current_date()
+        }
+        return data
+    except Exception as e:
+        print(f"解析NSD页面 {url} 失败: {e}")
+        return None
+
 def crawl_article_content(url, publish_date, headers, title_hint=None):
     """爬取文章内容的通用函数"""
     # 增加重试机制，最多重试3次
     retry_count = 3
     html = None
     lower_url = url.lower()
+    # 按域名定制请求头（例如微信需要 Referer）
+    req_headers = dict(headers or {})
+    if 'mp.weixin.qq.com' in lower_url and 'Referer' not in req_headers:
+        req_headers['Referer'] = 'https://weixin.sogou.com/'
+        req_headers.setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+        req_headers.setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
+        req_headers.setdefault('Upgrade-Insecure-Requests', '1')
     # 直接文件链接（如月报 PDF/DOCX 等）
     if any(lower_url.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
         data = {}
@@ -510,7 +677,7 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
     while retry_count > 0:
         try:
             # 设置超时时间为15秒，避免无限等待
-            html = requests.get(url=url, headers=headers, timeout=15)
+            html = requests.get(url=url, headers=req_headers, timeout=15, proxies=NO_PROXIES)
             # 优先使用服务端声明编码，其次使用apparent_encoding，最后退回utf-8
             if not html.encoding or html.encoding.lower() in ['iso-8859-1', 'ascii']:
                 html.encoding = html.apparent_encoding or 'utf-8'
@@ -547,6 +714,10 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             return parse_sass_article(soup, url, publish_date)
         elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
             return parse_cdi_article(soup, url, publish_date)
+        elif 'mp.weixin.qq.com' in url:
+            return parse_wechat_article(soup, url, publish_date)
+        elif 'nsd.pku.edu.cn' in url:
+            return parse_nsd_article(soup, url, publish_date)
         else:
             print(f"未知网站，无法解析: {url}")
             return None
@@ -559,7 +730,12 @@ def main():
     """主函数"""
     print("开始爬取智库文章内容...")
     
-    lst = []
+    lst = []  # 本次新增内容
+    # 读取已有输出，准备跳过已抓取的 URL
+    OUTPUT_JSON_PATH = 'output_complete.json'
+    existing_items, seen_urls = load_existing_results(OUTPUT_JSON_PATH)
+    print(f"已载入历史条目 {len(existing_items)} 条，将跳过重复 URL")
+    run_seen_urls = set()  # 本轮去重，避免同一次运行内重复抓取
     headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0'
     }
@@ -584,7 +760,7 @@ def main():
             def fetch(url: str):
                 for _ in range(3):
                     try:
-                        r = requests.get(url, headers=headers, timeout=15)
+                        r = requests.get(url, headers=headers, timeout=15, proxies=NO_PROXIES)
                         if not r.encoding or r.encoding.lower() in ['iso-8859-1', 'ascii']:
                             r.encoding = r.apparent_encoding or 'utf-8'
                         if r.status_code == 200:
@@ -634,6 +810,18 @@ def main():
                     em = a.select_one('div.info em')
                     pub = norm_date(em.get_text()) if em else ''
                     detail_tasks.append((link, pub, title_hint))
+            # 过滤已存在的 URL，避免重复抓取
+            _filtered = []
+            _skip_cnt = 0
+            for (_u, _pub, _t) in detail_tasks:
+                _nu = normalize_url(_u)
+                if (not _nu) or (_nu in seen_urls) or (_nu in run_seen_urls):
+                    _skip_cnt += 1
+                    continue
+                run_seen_urls.add(_nu)
+                _filtered.append((_u, _pub, _t))
+            detail_tasks = _filtered
+            print(f"已从直抓任务中过滤已存在 {_skip_cnt} 条，剩余 {len(detail_tasks)} 条需要处理")
             print(f"直抓模式共发现 {len(detail_tasks)} 篇文章/文件，开始逐条解析...")
             for i, (u, pub, t_hint) in enumerate(detail_tasks, 1):
                 try:
@@ -648,10 +836,18 @@ def main():
         print(f"找到 {len(sj_lst)} 篇文章需要爬取")
         
         # 遍历每篇文章
+        total_cnt = len(sj_lst)
+        skipped_cnt = 0
         for i, m in enumerate(sj_lst, 1):
             try:
                 url = m.select('a')[0]['href']
                 publish_date = m.select('span')[0].text
+                # 已存在则跳过（先于正文抓取与标题获取）
+                nu = normalize_url(url)
+                if (not nu) or (nu in seen_urls) or (nu in run_seen_urls):
+                    skipped_cnt += 1
+                    continue
+                run_seen_urls.add(nu)
                 # 从聚合页获取标题作为 hint（用于文件型链接）
                 try:
                     title_hint = clean_text(m.select('h3')[0].get_text())
@@ -681,14 +877,14 @@ def main():
         
         print(f"爬取完成，共成功爬取 {len(lst)} 篇文章")
         
-        # 保存结果
+        # 输出：仅在有新增时，将新增内容追加至历史结果尾部
         if lst:
-            with open('output_complete.json', 'w', encoding='utf-8') as f:
-                json.dump(lst, f, ensure_ascii=False, indent=2, default=str)
-            print(f"结果已保存到 output_complete.json")
+            combined = existing_items + lst
+            with open(OUTPUT_JSON_PATH, 'w', encoding='utf-8') as f:
+                json.dump(combined, f, ensure_ascii=False, indent=2, default=str)
+            print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)} 条，累计 {len(combined)} 条")
         else:
-            print("没有成功爬取到任何文章")
-            
+            print("无新增内容，保留已有 output_complete.json")
     except Exception as e:
         print(f"程序执行过程中发生错误: {e}")
 
