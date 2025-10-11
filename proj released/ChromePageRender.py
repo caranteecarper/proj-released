@@ -7,6 +7,7 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 
 import undetected_chromedriver
+import os
 from typing import Literal
 from time import sleep
 
@@ -32,11 +33,16 @@ class SafeChromeUndetected(undetected_chromedriver.Chrome):
 
 class ChromePageRender:
     def __init__(self, chrome_driver_filepath: str, options: Options, use_undetected_chromedriver: bool = False):
+        # Allow auto-managed driver when filepath is empty or invalid
+        if chrome_driver_filepath and os.path.isfile(chrome_driver_filepath):
+            service = Service(chrome_driver_filepath)
+        else:
+            service = Service()
         self.__browser = SafeChrome(
-            service=Service(chrome_driver_filepath),
+            service=service,
             options=options
         ) if not use_undetected_chromedriver else SafeChromeUndetected(
-            service=Service(chrome_driver_filepath),
+            service=service,
             options=options
         )
 

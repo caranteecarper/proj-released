@@ -1,10 +1,11 @@
-import pandas as pd
+import json
 from bs4 import BeautifulSoup
 import requests
 from datetime import datetime
 from requests.exceptions import RequestException
 import time
 import re
+from urllib.parse import urljoin as url_join
 
 # ------------------------------ 通用工具函数与回退提取 ------------------------------
 
@@ -436,11 +437,75 @@ def parse_sass_article(soup, url, publish_date):
         print(f"解析上海社会科学院页面 {url} 失败: {e}")
         return None
 
-def crawl_article_content(url, publish_date, headers):
+def parse_cdi_article(soup, url, publish_date):
+    """解析综合开发研究院（中国·深圳）的文章"""
+    try:
+        data = {}
+        title_selectors = [
+            'div.head h1',
+            'h1',
+            '.article-title',
+            '.title'
+        ]
+        content_selectors = [
+            '#info', 'div#info', '.article-content', '.content', '#content', '.text'
+        ]
+        title = ''
+        for selector in title_selectors:
+            node = soup.select_one(selector)
+            if node and node.get_text(strip=True):
+                title = clean_text(node.get_text())
+                break
+        content = ''
+        for selector in content_selectors:
+            node = soup.select_one(selector)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                break
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"综合开发研究院文章解析失败，标题或内容为空: {url}")
+            return None
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '综合开发研究院（中国·深圳）'
+        data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析综合开发研究院页面 {url} 失败: {e}")
+        return None
+
+def crawl_article_content(url, publish_date, headers, title_hint=None):
     """爬取文章内容的通用函数"""
     # 增加重试机制，最多重试3次
     retry_count = 3
     html = None
+    lower_url = url.lower()
+    # 直接文件链接（如月报 PDF/DOCX 等）
+    if any(lower_url.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+        data = {}
+        data['title'] = title_hint or clean_text(lower_url.split('/')[-1])
+        data['url'] = url
+        data['publish_date'] = publish_date
+        if 'cdi.com.cn' in lower_url:
+            data['authors'] = '综合开发研究院（中国·深圳）'
+            data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+        else:
+            data['authors'] = ''
+            data['thinkank_name'] = ''
+        data['summary'] = ''
+        data['content'] = ''
+        data['attachments'] = url
+        data['crawl_date'] = get_current_date()
+        return data
     
     while retry_count > 0:
         try:
@@ -480,6 +545,8 @@ def crawl_article_content(url, publish_date, headers):
             return parse_ccid_article(soup, url, publish_date)
         elif 'www.sass.org.cn' in url:
             return parse_sass_article(soup, url, publish_date)
+        elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
+            return parse_cdi_article(soup, url, publish_date)
         else:
             print(f"未知网站，无法解析: {url}")
             return None
@@ -504,6 +571,79 @@ def main():
         
         soup = BeautifulSoup(s, 'lxml')
         sj_lst = soup.select('.page-board-item')
+        if len(sj_lst) == 0:
+            print("聚合页没有发现条目，启用 CDI 栏目直抓模式...")
+            def norm_date(text: str) -> str:
+                if not text:
+                    return ''
+                m = re.search(r'(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})', text)
+                if m:
+                    y, m1, d = m.groups()
+                    return f"{int(y):04d}-{int(m1):02d}-{int(d):02d}"
+                return text
+            def fetch(url: str):
+                for _ in range(3):
+                    try:
+                        r = requests.get(url, headers=headers, timeout=15)
+                        if not r.encoding or r.encoding.lower() in ['iso-8859-1', 'ascii']:
+                            r.encoding = r.apparent_encoding or 'utf-8'
+                        if r.status_code == 200:
+                            return r.text
+                    except RequestException:
+                        time.sleep(1)
+                return ''
+            base = 'http://www.cdi.com.cn'
+            columns = [102, 152, 150, 153, 154]
+            max_pages = 2
+            detail_tasks = []
+            for cid in columns:
+                for p in range(1, max_pages + 1):
+                    url = f"{base}/Article/List?ColumnId={cid}" + ('' if p == 1 else f"&pageIndex={p}")
+                    html = fetch(url)
+                    if not html:
+                        continue
+                    sp = BeautifulSoup(html, 'lxml')
+                    ul = sp.select_one('ul#ColumnsList')
+                    if not ul:
+                        continue
+                    for li in ul.select('li'):
+                        a = li.select_one('div.img a') or li.select_one('div.details a.a-full') or li.select_one('a')
+                        if not a or not a.get('href'):
+                            continue
+                        link = url_join(url, a['href'])
+                        title_node = li.select_one('div.info span') or li.select_one('span')
+                        title_hint = clean_text(title_node.get_text()) if title_node else ''
+                        em = li.select_one('div.info em') or li.select_one('em')
+                        pub = norm_date(em.get_text()) if em else ''
+                        detail_tasks.append((link, pub, title_hint))
+            for p in range(1, max_pages + 1):
+                url = f"{base}/Files/ListYear?ColumnId=155" + ('' if p == 1 else f"&pageIndex={p}")
+                html = fetch(url)
+                if not html:
+                    continue
+                sp = BeautifulSoup(html, 'lxml')
+                container = sp.select_one('div#ColumnsList')
+                if not container:
+                    continue
+                for a in container.select('ul.setimage320 li a.item'):
+                    if not a.get('href'):
+                        continue
+                    link = url_join(url, a['href'])
+                    info_span = a.select_one('div.info span')
+                    title_hint = clean_text(info_span.get_text()) if info_span else ''
+                    em = a.select_one('div.info em')
+                    pub = norm_date(em.get_text()) if em else ''
+                    detail_tasks.append((link, pub, title_hint))
+            print(f"直抓模式共发现 {len(detail_tasks)} 篇文章/文件，开始逐条解析...")
+            for i, (u, pub, t_hint) in enumerate(detail_tasks, 1):
+                try:
+                    print(f"[{i}/{len(detail_tasks)}] {u}")
+                    data = crawl_article_content(u, pub, headers, title_hint=t_hint)
+                    if data:
+                        lst.append(data)
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"处理 {u} 出错: {e}")
         
         print(f"找到 {len(sj_lst)} 篇文章需要爬取")
         
@@ -512,11 +652,16 @@ def main():
             try:
                 url = m.select('a')[0]['href']
                 publish_date = m.select('span')[0].text
+                # 从聚合页获取标题作为 hint（用于文件型链接）
+                try:
+                    title_hint = clean_text(m.select('h3')[0].get_text())
+                except Exception:
+                    title_hint = ''
                 
                 print(f"正在处理第 {i}/{len(sj_lst)} 篇文章: {url}")
                 
                 # 爬取文章内容
-                data = crawl_article_content(url, publish_date, headers)
+                data = crawl_article_content(url, publish_date, headers, title_hint=title_hint)
                 
                 if data:
                     lst.append(data)
@@ -538,8 +683,8 @@ def main():
         
         # 保存结果
         if lst:
-            result = pd.DataFrame(lst)
-            result.to_json('output_complete.json', orient='records', force_ascii=False, indent=2)
+            with open('output_complete.json', 'w', encoding='utf-8') as f:
+                json.dump(lst, f, ensure_ascii=False, indent=2, default=str)
             print(f"结果已保存到 output_complete.json")
         else:
             print("没有成功爬取到任何文章")

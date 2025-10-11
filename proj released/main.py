@@ -1,5 +1,8 @@
-# from os import getcwd
+﻿# from os import getcwd
 from time import sleep
+import os
+import re
+import requests
 
 from datetime import datetime
 
@@ -13,8 +16,7 @@ from ChromePageRender import (
 )
 
 # configure chrome driver path
-__chrome_driver_path: str = "D:\AAAAA兰州大学\人工智能\爬虫项目\proj released\proj released\chromedrivers\chromedriver-win64-v138.0.7204.92\chromedriver.exe"
-
+__chrome_driver_path: str = ""
 from dominate import document as HTMLDocument, tags as HTMLTags, util as HTMLUtils
 from bs4 import BeautifulSoup
 from tqdm import tqdm as LoopMeter
@@ -299,6 +301,126 @@ def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_n
                             HTMLTags.span(span_text)
     return None
 
+def handler8_cdi_articles(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    if len(url_info['URLs']) <= 0:
+        return None
+    urls_contents = {}
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+    }
+    for url in url_info['URLs']:
+        html_content = None
+        try:
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=url,
+                selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+                waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+                print_error_log_to_console=True
+            )
+            if not is_timeout:
+                html_content = chrome_page_render.get_page_source()
+        except Exception:
+            html_content = None
+        if html_content is None:
+            try:
+                resp = requests.get(url, headers=headers, timeout=20)
+                if not resp.encoding or resp.encoding.lower() in ['iso-8859-1', 'ascii']:
+                    resp.encoding = resp.apparent_encoding or 'utf-8'
+                if resp.status_code == 200:
+                    html_content = resp.text
+            except Exception:
+                html_content = None
+        urls_contents[url] = html_content
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=url_info['URLs'][0]):
+                HTMLTags.h2(url_name)
+            for (url, html_content) in urls_contents.items():
+                if html_content is None:
+                    continue
+                soup = BeautifulSoup(html_content, 'html.parser')
+                container = soup.select_one('ul#ColumnsList')
+                if container is None:
+                    continue
+                for old_li in container.select('li'):
+                    old_a = old_li.select_one('div.img a') or old_li.select_one('div.details a.a-full') or old_li.select_one('a')
+                    if old_a is None or not old_a.get('href'):
+                        continue
+                    a_href = url_join(url, old_a['href'])
+                    title_node = old_li.select_one('div.info span') or old_li.select_one('span')
+                    if title_node is None:
+                        continue
+                    h3_text = title_node.get_text(strip=True)
+                    em_node = old_li.select_one('div.info em') or old_li.select_one('em')
+                    span_text_raw = em_node.get_text(strip=True) if em_node is not None else ''
+                    m = re.search(r'(\d{4})[-./](\d{1,2})[-./](\d{1,2})', span_text_raw)
+                    span_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else span_text_raw
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(h3_text)
+                            HTMLTags.span(span_text)
+    return None
+
+
+def handler9_cdi_files(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    if len(url_info['URLs']) <= 0:
+        return None
+    urls_contents = {}
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+    }
+    for url in url_info['URLs']:
+        html_content = None
+        try:
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=url,
+                selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+                waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+                print_error_log_to_console=True
+            )
+            if not is_timeout:
+                html_content = chrome_page_render.get_page_source()
+        except Exception:
+            html_content = None
+        if html_content is None:
+            try:
+                resp = requests.get(url, headers=headers, timeout=20)
+                if not resp.encoding or resp.encoding.lower() in ['iso-8859-1', 'ascii']:
+                    resp.encoding = resp.apparent_encoding or 'utf-8'
+                if resp.status_code == 200:
+                    html_content = resp.text
+            except Exception:
+                html_content = None
+        urls_contents[url] = html_content
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=url_info['URLs'][0]):
+                HTMLTags.h2(url_name)
+            for (url, html_content) in urls_contents.items():
+                if html_content is None:
+                    continue
+                soup = BeautifulSoup(html_content, 'html.parser')
+                columns_list = soup.select_one('div#ColumnsList')
+                if columns_list is None:
+                    continue
+                for a_item in columns_list.select('ul.setimage320 li a.item'):
+                    if not a_item.get('href'):
+                        continue
+                    a_href = url_join(url, a_item['href'])
+                    info_span = a_item.select_one('div.info span')
+                    h3_text = info_span.get_text(strip=True) if info_span is not None else a_item.get('title', '').strip()
+                    em_node = a_item.select_one('div.info em')
+                    span_text_raw = em_node.get_text(strip=True) if em_node is not None else ''
+                    m = re.search(r'(\d{4})[-./](\d{1,2})[-./](\d{1,2})', span_text_raw)
+                    span_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else span_text_raw
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(h3_text)
+                            HTMLTags.span(span_text)
+    return None
+
 
 URLData = {
     '中国国际工程咨询有限公司（智库建议）': {
@@ -360,7 +482,7 @@ URLData = {
         'LogoPath': './Logos/handler2.png',
         'HTMLContentHandler': handler2
     },
-    '国务院发展研究中心（中心动态）': {
+    '国务院发展研究中心': {
         'URL': 'https://www.drc.gov.cn/Leaf.aspx?leafid=1346',
         'NumberOfPagesNeeded': 2,
         'RulesAwaitingSelectors(Types,Rules)': [
@@ -390,7 +512,7 @@ URLData = {
         'LogoPath': './Logos/handler4.png',
         'HTMLContentHandler': handler4
     },
-    '中国宏观经济研究院（科研动态）': {
+    '国家发改委宏观经济研究院（科研动态）': {
         'URLs': [
             'https://www.amr.org.cn/ghdt/kydt/index.html',
             'https://www.amr.org.cn/ghdt/kydt/index_1.html'
@@ -460,6 +582,87 @@ URLData = {
         'HTMLContentHandler': handler7
     },
 }
+CDI_URLData = {
+    '综合开发研究院（樊纲观点）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Article/List?ColumnId=102',
+            'http://www.cdi.com.cn/Article/List?ColumnId=102&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'ul#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler8_cdi_articles
+    },
+    '综合开发研究院（综研国策）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Article/List?ColumnId=152',
+            'http://www.cdi.com.cn/Article/List?ColumnId=152&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'ul#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler8_cdi_articles
+    },
+    '综合开发研究院（综研观察）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Article/List?ColumnId=150',
+            'http://www.cdi.com.cn/Article/List?ColumnId=150&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'ul#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler8_cdi_articles
+    },
+    '综合开发研究院（综研专访）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Article/List?ColumnId=153',
+            'http://www.cdi.com.cn/Article/List?ColumnId=153&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'ul#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler8_cdi_articles
+    },
+    '综合开发研究院（综研视点）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Article/List?ColumnId=154',
+            'http://www.cdi.com.cn/Article/List?ColumnId=154&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'ul#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler8_cdi_articles
+    },
+    '综合开发研究院（中国经济月报）': {
+        'URLs': [
+            'http://www.cdi.com.cn/Files/ListYear?ColumnId=155',
+            'http://www.cdi.com.cn/Files/ListYear?ColumnId=155&pageIndex=2',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div#ColumnsList'),
+            ('css', 'div.content')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler8.png',
+        'HTMLContentHandler': handler9_cdi_files
+    },
+}
+URLData.update(CDI_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                   The following code collects online data and generates a new HTML page.                          |
@@ -504,14 +707,16 @@ with new_document.body:
         f"{current_time.hour:02d}:{current_time.minute:02d}:{current_time.second:02d}）"
     )
     HTMLTags.div(cls='page-board search-container', id='search-container')
-
 for (url_name, url_info) in LoopMeter(URLData.items(), unit="site", unit_scale=False):
-    url_info['HTMLContentHandler'](
-        chrome_page_render=chrome_page_render,
-        document=new_document,
-        url_name=url_name,
-        url_info=url_info
-    )
+    try:
+        url_info['HTMLContentHandler'](
+            chrome_page_render=chrome_page_render,
+            document=new_document,
+            url_name=url_name,
+            url_info=url_info
+        )
+    except Exception as e:
+        print(f"Skip site '{url_name}' due to error: {e}")
 
 try:
     with open('./generated_html/index.html', 'w', encoding='utf-8') as html_file:
@@ -519,3 +724,11 @@ try:
     print(f"Successfully output \"./generated_html/index.html\".")
 except Exception as e:
     print(f"Failed to output \"./generated_html/index.html\". Error: {e}")
+
+
+
+
+
+
+
+
