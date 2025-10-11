@@ -45,6 +45,11 @@ class ChromePageRender:
             service=service,
             options=options
         )
+        # Reduce the WebDriver command executor read timeout from ~120s to 30s
+        try:
+            self.__browser.command_executor.set_timeout(30)
+        except Exception:
+            pass
 
     def goto_url(
             self,

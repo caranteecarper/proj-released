@@ -3,6 +3,9 @@ from time import sleep
 import os
 import re
 import requests
+import sys
+import json
+import hashlib
 
 from datetime import datetime
 
@@ -665,8 +668,265 @@ CDI_URLData = {
 URLData.update(CDI_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
+# |                                   Change Detection Module (轻量变更检测)                                          |
+# ---------------------------------------------------------------------------------------------------------------------
+
+# 说明：
+# - 目标：在不改动其余逻辑的前提下，避免在“列表页完全未更新”的情况下重建 index.html，
+#         显著减少 main.py 的运行时长。
+# - 方法：
+#   1) 为 URLData 中的每个列表页 URL 计算“轻量指纹”：ETag、Last-Modified、以及前若干字节内容的哈希；
+#   2) 将指纹持久化到本地 JSON 文件；
+#   3) 下次运行先读取旧指纹，对每个 URL 做条件请求（If-None-Match / If-Modified-Since）或轻量 GET；
+#      若全部未变化，则直接跳过重建并复用上次生成的 HTML。
+
+from typing import Dict, List, Tuple, Optional, Any
+from urllib.parse import urlparse as _cd_url_parse
+
+FINGERPRINT_STORE_PATH = os.path.join('.', 'generated_html', 'index.fingerprints.json')
+
+
+def _ensure_parent_dir(path: str) -> None:
+    """确保指纹文件所在目录存在。"""
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+
+
+def _normalize_url(u: str) -> str:
+    """对 URL 做简单规范化（小写 scheme/host，去除首尾空格）。"""
+    try:
+        u = (u or '').strip()
+        parts = _cd_url_parse(u)
+        if not parts.scheme:
+            return u
+        # 仅规范化 scheme/host，保留 path/query 完整性
+        norm = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower())
+        return norm.geturl()
+    except Exception:
+        return u
+
+
+def _load_fingerprints(path: str) -> Dict[str, Any]:
+    """读取历史指纹；文件不存在时返回空字典。"""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_fingerprints(path: str, data: Dict[str, Any]) -> None:
+    """保存新的指纹。"""
+    _ensure_parent_dir(path)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _collect_seed_urls(url_data: Dict[str, Any]) -> List[str]:
+    """收集 URLData 中的所有列表页 URL（去重、排序）。"""
+    urls = set()
+    for cfg in url_data.values():
+        try:
+            for u in cfg.get('URLs', []) or []:
+                urls.add(_normalize_url(u))
+        except Exception:
+            continue
+    return sorted(urls)
+
+
+def _sha256_bytes(b: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(b or b'')
+    return h.hexdigest()
+
+
+def _fetch_fingerprint(url: str, session: requests.Session, prev_fp: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], bool]:
+    """
+    获取单个 URL 的轻量指纹。
+    返回 (fp_dict, not_modified)
+
+    策略：
+    - 先 HEAD，携带 If-None-Match / If-Modified-Since；若 304，则直接 not_modified=True；
+    - 否则读取 ETag/Last-Modified；若均缺失，再做 Range: bytes=0-4095 的 GET 取前 4KB 做内容哈希；
+    - 若服务端不支持 Range 也可接受，取较小响应体再哈希。
+    """
+    headers: Dict[str, str] = {}
+    if prev_fp:
+        if prev_fp.get('etag'):
+            headers['If-None-Match'] = prev_fp['etag']
+        if prev_fp.get('last_modified'):
+            headers['If-Modified-Since'] = prev_fp['last_modified']
+
+    # 先尝试 HEAD
+    etag = ''
+    last_modified = ''
+    try:
+        r = session.head(url, headers=headers, allow_redirects=True, timeout=10)
+        if r.status_code == 304:
+            # 未修改
+            return ({
+                'url': url,
+                'etag': prev_fp.get('etag') if prev_fp else '',
+                'last_modified': prev_fp.get('last_modified') if prev_fp else '',
+                'content_hash': prev_fp.get('content_hash') if prev_fp else ''
+            }, True)
+        etag = r.headers.get('ETag', '') or r.headers.get('Etag', '')
+        last_modified = r.headers.get('Last-Modified', '') or r.headers.get('Last-modified', '')
+    except Exception:
+        pass
+
+    # 若头信息不足或可能变化，获取部分内容以计算哈希
+    content_hash = ''
+    try:
+        range_headers = dict(headers)
+        range_headers['Range'] = 'bytes=0-4095'
+        r2 = session.get(url, headers=range_headers, allow_redirects=True, timeout=15, stream=True)
+        if r2.status_code == 304:
+            return ({
+                'url': url,
+                'etag': prev_fp.get('etag') if prev_fp else etag,
+                'last_modified': prev_fp.get('last_modified') if prev_fp else last_modified,
+                'content_hash': prev_fp.get('content_hash') if prev_fp else ''
+            }, True)
+        # 尽量只读取前 4KB
+        chunk = b''
+        try:
+            for _ in range(4):  # 4 x 1KB
+                part = next(r2.iter_content(1024))
+                if not part:
+                    break
+                chunk += part
+                if len(chunk) >= 4096:
+                    break
+        except StopIteration:
+            pass
+        except Exception:
+            # 若流式读取异常，退回读取完整响应体（可能较小）
+            try:
+                chunk = r2.content or b''
+            except Exception:
+                chunk = b''
+        content_hash = _sha256_bytes(chunk)
+    except Exception:
+        # GET 失败时保留已有的头部信息
+        pass
+
+    fp: Dict[str, Any] = {
+        'url': url,
+        'etag': etag or (prev_fp.get('etag') if prev_fp else ''),
+        'last_modified': last_modified or (prev_fp.get('last_modified') if prev_fp else ''),
+        'content_hash': content_hash or (prev_fp.get('content_hash') if prev_fp else '')
+    }
+
+    # 如果三者都为空，则无法判断，视为“可能有变动”
+    if not (fp['etag'] or fp['last_modified'] or fp['content_hash']):
+        return fp, False
+    # 对比逻辑：
+    if prev_fp:
+        if fp['etag'] and prev_fp.get('etag') and fp['etag'] != prev_fp['etag']:
+            return fp, False
+        if fp['last_modified'] and prev_fp.get('last_modified') and fp['last_modified'] != prev_fp['last_modified']:
+            return fp, False
+        if fp['content_hash'] and prev_fp.get('content_hash') and fp['content_hash'] != prev_fp['content_hash']:
+            return fp, False
+        # 三者都存在时均相同，则未修改
+        if (fp['etag'] or fp['last_modified'] or fp['content_hash']):
+            return fp, True
+    return fp, False
+
+
+def detect_changes_and_maybe_exit(url_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    执行变更检测：
+    - 若全部列表页未变化，直接打印提示并退出进程；
+    - 若发现任意 URL 变化，返回新的指纹映射（供构建成功后落盘）。
+
+    返回值：new_fingerprints: dict
+    """
+    seed_urls = _collect_seed_urls(url_data)
+    if not seed_urls:
+        # 没有任何 URL，放行构建
+        return {}
+
+    prev_store = _load_fingerprints(FINGERPRINT_STORE_PATH)
+    prev_items = prev_store.get('items') if isinstance(prev_store, dict) else None
+    prev_map: Dict[str, Any] = {}
+    if isinstance(prev_items, list):
+        for item in prev_items:
+            try:
+                prev_map[_normalize_url(item.get('url', ''))] = item
+            except Exception:
+                continue
+
+    session = requests.Session()
+    changed = False
+    new_items: List[Dict[str, Any]] = []
+    changed_urls: List[str] = []
+
+    for u in seed_urls:
+        prev_fp = prev_map.get(u)
+        fp, not_modified = _fetch_fingerprint(u, session=session, prev_fp=prev_fp)
+        new_items.append(fp)
+        if not not_modified:
+            # 若无历史记录也视为变化（首次运行）
+            if prev_fp is None:
+                changed = True
+                changed_urls.append(u + ' (first-check)')
+            else:
+                # 进一步判断（当三要素均空时，也算变化）
+                if not (fp.get('etag') or fp.get('last_modified') or fp.get('content_hash')):
+                    changed = True
+                    changed_urls.append(u + ' (undetermined)')
+                else:
+                    # 已比较过差异，标记变化
+                    if fp.get('etag') != prev_fp.get('etag') or fp.get('last_modified') != prev_fp.get('last_modified') or (
+                        fp.get('content_hash') and fp.get('content_hash') != prev_fp.get('content_hash')
+                    ):
+                        changed = True
+                        changed_urls.append(u)
+
+    # 如果没有任何历史指纹文件，同时 index.html 也不存在，则视为需要构建
+    index_exists = os.path.isfile(os.path.join('.', 'generated_html', 'index.html'))
+    if (not prev_store) and (not index_exists):
+        changed = True
+
+    if not changed:
+        print('Change detection: no list pages updated; reuse existing generated_html/index.html. Skip rebuilding.')
+        sys.exit(0)
+
+    # 返回新的指纹，供构建成功后保存
+    return {
+        'generated_at': datetime.now().isoformat(timespec='seconds'),
+        'items': new_items,
+        'changed_urls': changed_urls,
+        'total_urls': len(seed_urls)
+    }
+
+
+# 在进入渲染构建之前执行变更检测
+_CHANGE_DETECTION_RESULT = detect_changes_and_maybe_exit(URLData)
+
+# ---------------------------------------------------------------------------------------------------------------------
 # |                   The following code collects online data and generates a new HTML page.                          |
 # ---------------------------------------------------------------------------------------------------------------------
+
+# 全局每页最大等待时间（秒）。若 10 秒内未就绪则跳过该页面。
+PER_PAGE_MAX_WAIT_SECONDS = int(os.getenv('MAIN_PER_PAGE_TIMEOUT', '10'))
+
+# 将 URLData 中各站点配置的等待时间统一限制为不超过 5 秒。
+for _site, _cfg in URLData.items():
+    try:
+        prev = _cfg.get('WaitingTimeLimitInSeconds')
+        if isinstance(prev, (int, float)):
+            _cfg['WaitingTimeLimitInSeconds'] = min(int(prev), PER_PAGE_MAX_WAIT_SECONDS)
+        else:
+            _cfg['WaitingTimeLimitInSeconds'] = PER_PAGE_MAX_WAIT_SECONDS
+    except Exception:
+        _cfg['WaitingTimeLimitInSeconds'] = PER_PAGE_MAX_WAIT_SECONDS
 
 
 chrome_options = ChromeOptions()
@@ -722,6 +982,12 @@ try:
     with open('./generated_html/index.html', 'w', encoding='utf-8') as html_file:
         html_file.write(new_document.render(pretty=True))  # pretty makes the HTML file human-readable
     print(f"Successfully output \"./generated_html/index.html\".")
+    # 构建成功后，更新指纹文件（非首次且检测模块已运行时）
+    try:
+        if isinstance(_CHANGE_DETECTION_RESULT, dict) and _CHANGE_DETECTION_RESULT:
+            _save_fingerprints(FINGERPRINT_STORE_PATH, _CHANGE_DETECTION_RESULT)
+    except Exception as e:
+        print(f"Warning: failed to update fingerprints: {e}")
 except Exception as e:
     print(f"Failed to output \"./generated_html/index.html\". Error: {e}")
 
