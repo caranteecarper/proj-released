@@ -2,6 +2,20 @@
 
 ## 2025-10-12
 
+### Brookings Institution 集成
+
+- main.py：新增 `handler12_brookings`，并在 `URLData` 中加入“美国布鲁金斯学会-研究与评论（Research & Commentary）”。
+  - 分页使用 `?page=1..8`（8 页≈80 条）。
+  - 等待选择器：`div#contentStream` 与 `div.articles-stream`。
+  - `LogoPath` 使用 `./Logos/brookings.png`，输出结构沿用 `.page-board-item > a > h3 + span`。
+- 内页爬取：新增 `parse_brookings_article` 并在路由中加入 `brookings.edu` 分支。
+  - 标题从 `h1`/`og:title` 抽取；
+  - 日期优先 JSON-LD `datePublished`，次选 `brookings.dataLayer.publish_date`，再退 `meta[article:published_time]`，最终统一为 `YYYY-MM-DD`；
+  - 作者优先 `brookings.dataLayer.author`（多作者逗号分隔），再退 `meta[name=author]` 或页面 Authors 模块；
+  - 附件优先 PDF/DOC/XLS 等文件链接；如无文件，则回退音视频（mp3/mp4/YouTube/Vimeo/SoundCloud/Libsyn 等）；
+  - `thinkank_name` 固定为“美国布鲁金斯学会”。
+  - 其他设置保持不变。
+
 - 新增 RAND Corporation 列表抓取与渲染：
   - 添加 `handler11_rand_topics`（主题栏目，每组近 30 条）
   - 原 `handler12_rand_pubs`（研究与评论，按日期阈值 2025-09-26 截止）已按后续要求移除

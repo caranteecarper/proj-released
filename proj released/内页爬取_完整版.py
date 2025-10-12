@@ -936,6 +936,8 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         elif 'www.rand.org' in url or 'rand.org' in url:
             # 使用改进版解析器，优先提取摘要正文
             return parse_rand_article2(soup, url, publish_date)
+        elif 'www.brookings.edu' in url or 'brookings.edu' in url:
+            return parse_brookings_article(soup, url, publish_date)
         elif 'mp.weixin.qq.com' in url:
             return parse_wechat_article(soup, url, publish_date)
         elif 'nsd.pku.edu.cn' in url:
@@ -1140,6 +1142,157 @@ def _remove_items_by_urls_file(json_path, remove_urls):
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(kept, f, ensure_ascii=False, indent=2, default=str)
     return len(data), len(kept)
+
+def parse_brookings_article(soup, url, publish_date):
+    """解析 Brookings 文章页（Research & Commentary 详情）
+    - 标题：h1 或 og:title
+    - 日期：优先 JSON-LD 的 datePublished，其次 dataLayer.publish_date 或 meta article:published_time
+    - 作者：优先 dataLayer.author，次选 meta name=author，再兜底页面 Authors 模块
+    - 正文：优先富文本（wysiwyg/entry-content/article），否则通用提取
+    - 附件：优先 PDF/DOC/XLS 等；若无，则取音视频（mp3/mp4/YouTube/Vimeo/SoundCloud/Libsyn 等）
+    - thinkank_name：固定填“美国布鲁金斯学会”
+    """
+    try:
+        # 标题
+        title = ''
+        node = soup.select_one('h1')
+        if node and node.get_text(strip=True):
+            title = clean_text(node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 日期：JSON-LD -> dataLayer -> meta -> 传入 publish_date
+        pub = ''
+        try:
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{1,2})-(\d{1,2})"', txt)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        except Exception:
+            pass
+        if not pub:
+            try:
+                for sc in soup.find_all('script'):
+                    txt = sc.get_text() or ''
+                    if 'brookings.dataLayer' in txt:
+                        m = re.search(r'"publish_date"\s*:\s*"(\d{4}-\d{2}-\d{2})"', txt)
+                        if m:
+                            pub = m.group(1)
+                            break
+            except Exception:
+                pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 作者
+        authors = ''
+        try:
+            for sc in soup.find_all('script'):
+                txt = sc.get_text() or ''
+                if 'brookings.dataLayer' in txt:
+                    m = re.search(r'"author"\s*:\s*"([^"]+)"', txt)
+                    if m:
+                        authors = clean_text(m.group(1))
+                        break
+        except Exception:
+            pass
+        if not authors:
+            meta_author = soup.select_one('meta[name="author"][content]')
+            if meta_author and meta_author.get('content'):
+                authors = clean_text(meta_author['content'])
+        if not authors:
+            try:
+                mod = soup.find(lambda tag: tag.name in ['div','section'] and ('Authors' in tag.get_text() or 'Author' in tag.get_text()))
+                if mod:
+                    names = []
+                    for a in mod.select('a, strong, b, .author, .authors'):
+                        t = clean_text(a.get_text())
+                        if t and len(t) <= 100 and not re.search(r'Follow|Subscribe|Facebook|Twitter', t, re.I):
+                            names.append(t)
+                    if names:
+                        authors = ', '.join(dict.fromkeys(names))
+            except Exception:
+                pass
+
+        # 正文
+        content = ''
+        for sel in [
+            'div.wysiwyg',
+            'div.byo-block.-narrow.wysiwyg-block',
+            'article .entry-content',
+            'article .post-content',
+            'article'
+        ]:
+            n = soup.select_one(sel)
+            if n and n.get_text(strip=True):
+                content = _text_from_container(n)
+                if content:
+                    break
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 附件：优先文件，其次音视频
+        attach_set = []
+        try:
+            for a in soup.select('a[href]'):
+                href = a.get('href') or ''
+                l = href.lower()
+                if any(l.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                    u = url_join(url, href)
+                    if u not in attach_set:
+                        attach_set.append(u)
+        except Exception:
+            pass
+        if not attach_set:
+            media_urls = []
+            try:
+                for s in soup.select('audio[src], audio source[src], video[src], video source[src], iframe[src], a[href]'):
+                    src = s.get('src') or s.get('href') or ''
+                    if not src:
+                        continue
+                    l = src.lower()
+                    if (
+                        l.endswith('.mp3') or l.endswith('.mp4') or
+                        'youtube.com' in l or 'vimeo.com' in l or 'soundcloud.com' in l or
+                        'libsyn.com' in l or 'podcasts.apple.com' in l or 'spotify.com' in l
+                    ):
+                        u = url_join(url, src)
+                        if u not in media_urls:
+                            media_urls.append(u)
+            except Exception:
+                pass
+            attach_set = media_urls
+        attachments = ' ; '.join(attach_set)
+
+        if not title or not content:
+            print(f"Brookings 解析失败，标题或正文为空: {url}")
+            return None
+
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': authors,
+            'thinkank_name': '美国布鲁金斯学会',
+            'summary': '',
+            'content': content,
+            'attachments': attachments,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 Brookings 页面失败: {url} 错误: {e}")
+        return None
 
 if __name__ == "__main__":
     import sys

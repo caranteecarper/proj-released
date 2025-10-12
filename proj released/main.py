@@ -334,6 +334,136 @@ def _rand_parse_en_date_to_iso(date_text: str) -> str:
     """RAND 列表常用英文日期（如 "Oct 8, 2025"）转为 YYYY-MM-DD。"""
     if not isinstance(date_text, str):
         return ''
+    return ''
+
+
+def handler12_brookings(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """Brookings Research & Commentary 列表处理
+    - 分页采用 ?page=N（与“显示更多”一致）
+    - 解析每个 article 的标题、链接与日期，合并至 index
+    - 日期优先从 <time datetime> 或英文日期文本解析为 YYYY-MM-DD
+    - 最多输出 MaxItems 条
+    """
+    max_items = int(url_info.get('MaxItems', 999999))
+    if len(url_info.get('URLs', [])) <= 0 or max_items <= 0:
+        return None
+
+    collected = 0
+    urls_contents = {}
+    for url in url_info['URLs']:
+        if collected >= max_items:
+            break
+        html = None if chrome_page_render.goto_url_waiting_for_selectors(
+            url=url,
+            selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+            waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+            print_error_log_to_console=True
+        ) else chrome_page_render.get_page_source()
+        urls_contents[url] = html
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo for Brookings')
+            with HTMLTags.a(href=url_info['URLs'][0]):
+                HTMLTags.h2(url_name)
+            for (url, html_content) in urls_contents.items():
+                if html_content is None or collected >= max_items:
+                    continue
+                soup = BeautifulSoup(html_content, 'html.parser')
+                # Brookings 页面由 Algolia 客户端渲染，运行态会出现实际的 article 列表
+                items = soup.select('div.articles-stream article')
+                if not items:
+                    # 兜底：直接找 article
+                    items = soup.select('article')
+                for art in items:
+                    if collected >= max_items:
+                        break
+                    # 链接
+                    a = (
+                        art.select_one('a[href^="https://www.brookings.edu/"]') or
+                        art.select_one('a[href^="/articles/"]') or
+                        art.select_one('a[href]')
+                    )
+                    if not a or not a.get('href'):
+                        continue
+                    a_href = url_join(url, a.get('href'))
+
+                    # 标题：aria-label > h3/h2 > a 文本
+                    title_text = (a.get('aria-label') or '').strip()
+                    if not title_text:
+                        h = art.select_one('h3, h2, .article-title, .linked-title')
+                        title_text = (h.get_text(strip=True) if h else a.get_text(strip=True) or '').strip()
+                    if not title_text:
+                        continue
+
+                    # 日期：优先 <time datetime>，否则文本中解析英文日期
+                    span_text = ''
+                    t = art.select_one('time[datetime]') or art.select_one('time')
+                    if t is not None:
+                        dt = t.get('datetime') or t.get_text(strip=True)
+                        if dt:
+                            # try ISO first
+                            m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', dt)
+                            if m:
+                                span_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                            else:
+                                span_text = _rand_parse_en_date_to_iso(dt)
+                    if not span_text:
+                        # fallback: 从卡片文本尝试提取
+                        raw = art.get_text(' ', strip=True)
+                        m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', raw)
+                        span_text = (
+                            f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else _rand_parse_en_date_to_iso(raw)
+                        )
+
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(title_text)
+                            HTMLTags.span(span_text)
+                    collected += 1
+                    if collected >= max_items:
+                        break
+    return None
+
+
+# 覆盖修复：重新定义英文日期解析，避免上方精简实现的缩进问题
+def _rand_parse_en_date_to_iso(date_text: str) -> str:
+    try:
+        if not isinstance(date_text, str):
+            return ''
+        s = (date_text or '').strip()
+        if not s:
+            return ''
+        m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+        if m:
+            return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        months = {
+            'jan': 1, 'january': 1,
+            'feb': 2, 'february': 2,
+            'mar': 3, 'march': 3,
+            'apr': 4, 'april': 4,
+            'may': 5,
+            'jun': 6, 'june': 6,
+            'jul': 7, 'july': 7,
+            'aug': 8, 'august': 8,
+            'sep': 9, 'sept': 9, 'september': 9,
+            'oct': 10, 'october': 10,
+            'nov': 11, 'november': 11,
+            'dec': 12, 'december': 12,
+        }
+        m = re.search(r'([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})', s)
+        if m:
+            mo = months.get(m.group(1).lower(), 0)
+            if mo:
+                return f"{int(m.group(3)):04d}-{mo:02d}-{int(m.group(2)):02d}"
+        m = re.search(r'(\d{1,2})\s+([A-Za-z]{3,9}),?\s+(\d{4})', s)
+        if m:
+            mo = months.get(m.group(2).lower(), 0)
+            if mo:
+                return f"{int(m.group(3)):04d}-{mo:02d}-{int(m.group(1)):02d}"
+        return ''
+    except Exception:
+        return ''
     s = date_text.strip()
     if not s:
         return ''
@@ -1062,6 +1192,32 @@ RAND_URLData = {
 }
 
 URLData.update(RAND_URLData)
+
+# --------------------------- Brookings Institution 站点配置 ---------------------------
+BROOKINGS_URLData = {
+    '美国布鲁金斯学会-研究与评论（Research & Commentary）': {
+        'URLs': [
+            'https://www.brookings.edu/research-commentary/?page=1',
+            'https://www.brookings.edu/research-commentary/?page=2',
+            'https://www.brookings.edu/research-commentary/?page=3',
+            'https://www.brookings.edu/research-commentary/?page=4',
+            'https://www.brookings.edu/research-commentary/?page=5',
+            'https://www.brookings.edu/research-commentary/?page=6',
+            'https://www.brookings.edu/research-commentary/?page=7',
+            'https://www.brookings.edu/research-commentary/?page=8',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div#contentStream'),
+            ('css', 'div.articles-stream')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/brookings.png',
+        'MaxItems': 80,
+        'HTMLContentHandler': handler12_brookings
+    },
+}
+
+URLData.update(BROOKINGS_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |
