@@ -747,6 +747,199 @@ def parse_rand_article2(soup, url, publish_date):
         print(f"解析 RAND 页面失败: {url} 错误: {e}")
         return None
 
+def parse_jpm_article(soup, url, publish_date):
+    """解析 摩根大通研究院 JPMorgan Insights 详情页
+    - 标题：优先 h1 / meta og:title
+    - 正文：优先常见正文容器，回退通用提取
+    - 日期：JSON-LD datePublished > meta article:published_time > <time>
+    - 作者：JSON-LD author / meta[name=author] / 页面作者节点
+    - 附件：优先文档（pdf/doc/xls/ppt），若无则回退音视频（audio/video/iframe/m3u8/mp3 等）
+    """
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('h1') or
+            soup.select_one('.article-title h1') or
+            soup.select_one('.article-title') or
+            soup.select_one('.title h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]') or soup.select_one('meta[name="title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 正文
+        content = ''
+        for sel in [
+            'article .content', 'article .rich-text', 'article .article-content', 'article',
+            '.rich-text', '.article-content', '.content', '#content'
+        ]:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                break
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期（英文到 YYYY-MM-DD）
+        pub = ''
+        try:
+            import json as _json
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                if not txt.strip():
+                    continue
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    continue
+                def _find_date(obj):
+                    if isinstance(obj, dict):
+                        for k in ['datePublished', 'dateCreated', 'dateModified']:
+                            v = obj.get(k)
+                            if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
+                                return v
+                    if isinstance(obj, list):
+                        for it in obj:
+                            v = _find_date(it)
+                            if v:
+                                return v
+                    return ''
+                d = _find_date(data)
+                if d:
+                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
+                    if m:
+                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                        break
+        except Exception:
+            pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            t = soup.select_one('time[datetime]')
+            if t and t.get('datetime'):
+                m3 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', t.get('datetime'))
+                if m3:
+                    pub = f"{int(m3.group(1)):04d}-{int(m3.group(2)):02d}-{int(m3.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 作者：JSON-LD / meta / 页面节点
+        authors = ''
+        try:
+            import json as _json
+            names = []
+            def _add_name(x):
+                if isinstance(x, str) and x.strip():
+                    names.append(clean_text(x))
+                elif isinstance(x, dict):
+                    n = x.get('name') or x.get('author') or x.get('creator')
+                    if isinstance(n, str) and n.strip():
+                        names.append(clean_text(n))
+                    elif isinstance(n, list):
+                        for e in n:
+                            _add_name(e)
+                elif isinstance(x, list):
+                    for e in x:
+                        _add_name(e)
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                if not txt.strip():
+                    continue
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    continue
+                if isinstance(data, dict) and 'author' in data:
+                    _add_name(data.get('author'))
+                elif isinstance(data, list):
+                    for obj in data:
+                        if isinstance(obj, dict) and 'author' in obj:
+                            _add_name(obj.get('author'))
+            if not names:
+                meta_author = soup.select_one('meta[name="author"][content]')
+                if meta_author and meta_author.get('content'):
+                    names.append(clean_text(meta_author['content']))
+            if not names:
+                for sel in ['a[href*="/insights/author" i]', 'a[href*="/authors/" i]', 'span[class*="author" i]', 'p[class*="author" i]', 'div[class*="author" i]']:
+                    node = soup.select_one(sel)
+                    if node and node.get_text(strip=True):
+                        names.append(clean_text(node.get_text()))
+                        break
+            if names:
+                # 去重并保持顺序
+                seen = set()
+                uniq = []
+                for n in names:
+                    if n and n not in seen:
+                        seen.add(n)
+                        uniq.append(n)
+                authors = '、'.join(uniq)
+        except Exception:
+            authors = ''
+
+        # 附件：优先文档，否则音视频
+        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8']
+        file_urls, media_urls = [], []
+        container = soup.select_one('article') or soup.select_one('.content') or soup
+        if container:
+            for a in container.select('a[href]'):
+                href = a.get('href', '')
+                if not href:
+                    continue
+                lower = href.lower()
+                full = url_join(url, href)
+                if any(lower.endswith(ext) for ext in file_exts):
+                    file_urls.append(full)
+                elif any(lower.endswith(ext) for ext in media_exts):
+                    media_urls.append(full)
+        # audio/video/iframe 源
+        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
+            for node in soup.select(sel):
+                src = node.get('src', '')
+                if not src:
+                    continue
+                lower = src.lower()
+                full = url_join(url, src)
+                if any(lower.endswith(ext) for ext in file_exts):
+                    file_urls.append(full)
+                elif any(ext in lower for ext in media_exts):
+                    media_urls.append(full)
+
+        attachments = ''
+        if file_urls:
+            attachments = ' ; '.join(file_urls)
+        elif media_urls:
+            attachments = ' ; '.join(media_urls)
+
+        if not title or not content:
+            print(f"JPM 文章解析失败，标题或正文为空: {url}")
+            return None
+
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': authors,
+            'thinkank_name': '摩根大通研究院',
+            'summary': '',
+            'content': content,
+            'attachments': attachments,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 JPM 页面失败: {url} 错误: {e}")
+        return None
+
 def parse_wechat_article(soup, url, publish_date):
     """解析微信文章（mp.weixin.qq.com）"""
     try:
@@ -933,6 +1126,8 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             return parse_sass_article(soup, url, publish_date)
         elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
             return parse_cdi_article(soup, url, publish_date)
+        elif 'jpmorgan.com' in url or 'www.jpmorgan.com' in url:
+            return parse_jpm_article(soup, url, publish_date)
         elif 'www.rand.org' in url or 'rand.org' in url:
             # 使用改进版解析器，优先提取摘要正文
             return parse_rand_article2(soup, url, publish_date)

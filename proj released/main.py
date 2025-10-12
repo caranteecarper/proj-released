@@ -328,6 +328,199 @@ def handler11_rand_topics(chrome_page_render: ChromePageRender, document: HTMLDo
     return None
 
 
+def _jpm_parse_en_date_to_iso(date_text: str) -> str:
+    """Parse common English date strings into YYYY-MM-DD for JPM pages."""
+    try:
+        if not isinstance(date_text, str):
+            return ''
+        s = (date_text or '').strip()
+        if not s:
+            return ''
+        m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+        if m:
+            return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        months = {
+            'jan': 1, 'january': 1,
+            'feb': 2, 'february': 2,
+            'mar': 3, 'march': 3,
+            'apr': 4, 'april': 4,
+            'may': 5,
+            'jun': 6, 'june': 6,
+            'jul': 7, 'july': 7,
+            'aug': 8, 'august': 8,
+            'sep': 9, 'sept': 9, 'september': 9,
+            'oct': 10, 'october': 10,
+            'nov': 11, 'november': 11,
+            'dec': 12, 'december': 12,
+        }
+        # e.g., "Oct 8, 2025"
+        m = re.search(r'([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})', s)
+        if m:
+            mo = months.get(m.group(1).lower(), 0)
+            if mo:
+                return f"{int(m.group(3)):04d}-{mo:02d}-{int(m.group(2)):02d}"
+        # e.g., "8 Oct 2025"
+        m = re.search(r'(\d{1,2})\s+([A-Za-z]{3,9}),?\s+(\d{4})', s)
+        if m:
+            mo = months.get(m.group(2).lower(), 0)
+            if mo:
+                return f"{int(m.group(3)):04d}-{mo:02d}-{int(m.group(1)):02d}"
+        return ''
+    except Exception:
+        return ''
+
+
+def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    JPMorgan Insights list handler
+    - Loads the main insights page and clicks "Load more" until MaxItems are collected or no more items.
+    - Extracts link, title, and date (if present) and appends to the document.
+    """
+    urls = url_info.get('URLs', []) or []
+    if len(urls) <= 0:
+        return None
+
+    def _extract_items(html: str, base_url: str):
+        soup = BeautifulSoup(html, 'html.parser')
+        root = soup.select_one('main') or soup
+        items = []
+        seen = set()
+        # Prefer card-like containers to avoid header/footer nav links
+        card_candidates = root.select('article, li, div')
+        for node in card_candidates:
+            classes = ' '.join(node.get('class') or []).lower()
+            if not (('card' in classes) or ('teaser' in classes) or ('insight' in classes) or node.name in ['article', 'li']):
+                continue
+            a = node.select_one('a[href*="/insights/"]') or node.select_one('a[href]')
+            if not a or not a.get('href'):
+                continue
+            href = url_join(base_url, a['href'])
+            if href in seen:
+                continue
+            # avoid nav/footer
+            if a.find_parent('nav') is not None:
+                continue
+            title_node = node.select_one('h3, h2') or a
+            title = title_node.get_text(strip=True) if title_node is not None else ''
+            date_node = node.select_one('time[datetime]') or node.select_one('time') or node.select_one('.date, .c-date, .o-date, .eyebrow-date')
+            date_text = ''
+            if date_node is not None:
+                date_text = _jpm_parse_en_date_to_iso(date_node.get_text(strip=True) or date_node.get('datetime', ''))
+            seen.add(href)
+            if title:
+                items.append((href, title, date_text))
+        # As a fallback, greedily scan anchors in main content
+        if not items:
+            for a in root.select('a[href*="/insights/"]'):
+                if a.find_parent('nav') is not None:
+                    continue
+                href = url_join(base_url, a.get('href', ''))
+                if not href or href in seen:
+                    continue
+                title = a.get_text(strip=True)
+                if not title:
+                    continue
+                items.append((href, title, ''))
+                seen.add(href)
+        return items
+
+    def _try_accept_cookies():
+        # Best-effort cookie/consent dismissal
+        for sel in [
+            'button#onetrust-accept-btn-handler',
+            'button[aria-label*="Accept"]',
+            'button[aria-label*="agree"]',
+            'button[class*="cookie"][class*="accept"]',
+        ]:
+            try:
+                is_timeout = chrome_page_render.click_on_html_element(
+                    click_element_selector_type='css',
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if is_timeout is False:
+                    break
+            except Exception:
+                pass
+
+    def _try_click_load_more() -> bool:
+        # Attempt several likely selectors for load-more button
+        selectors = [
+            'button.load-more',
+            'button[class*="load" i]',
+            'button[aria-label*="Load" i]',
+            'button[aria-label*="More" i]',
+            'button[data-testid*="load" i]',
+            'div.load-more button',
+            'a[role="button"][class*="load" i]',
+        ]
+        for sel in selectors:
+            try:
+                timed_out = chrome_page_render.click_on_html_element(
+                    click_element_selector_type='css',
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if timed_out is False:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    max_items = int(url_info.get('MaxItems', 80))
+    base_url = urls[0]
+    # Open and wait for initial content
+    try:
+        is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+            url=base_url,
+            selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+            waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+            print_error_log_to_console=True
+        )
+    except Exception:
+        is_timeout = True
+    if is_timeout:
+        return None
+
+    _try_accept_cookies()
+
+    html = chrome_page_render.get_page_source()
+    results = _extract_items(html, base_url)
+
+    # Keep clicking load-more while we need more items
+    while len(results) < max_items:
+        before = len(results)
+        clicked = _try_click_load_more()
+        if not clicked:
+            break
+        sleep(1.2)
+        try:
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            break
+        results = _extract_items(html, base_url)
+        if len(results) <= before:
+            break
+
+    # Render collected items
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
+
 ## 删除：原 RAND Research & Commentary 列表处理器已按需求移除
 
 def _rand_parse_en_date_to_iso(date_text: str) -> str:
@@ -1106,7 +1299,24 @@ RAND_URLData = {
 
 URLData.update(RAND_URLData)
 
- 
+JPM_URLData = {
+    '摩根大通研究院（All Insights）': {
+        'URLs': [
+            'https://www.jpmorgan.com/insights#all-insights',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main'),
+            ('css', 'a[href*="/insights/"]'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler12_JPMorgan.svg',
+        'MaxItems': 80,
+        'HTMLContentHandler': handler12_jpm_insights
+    },
+}
+
+URLData.update(JPM_URLData)
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |
