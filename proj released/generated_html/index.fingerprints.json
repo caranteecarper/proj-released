@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-11T21:29:20",
+  "generated_at": "2025-10-12T10:24:48",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -9,14 +9,14 @@
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index.htm",
-      "etag": "W/\"68ea0c20-6f80\"",
-      "last_modified": "Sat, 11 Oct 2025 07:49:52 GMT",
+      "etag": "W/\"68ea9f1d-6f80\"",
+      "last_modified": "Sat, 11 Oct 2025 18:17:01 GMT",
       "content_hash": "6d7d370214935091a7fff6f24cb08ec7586ec368f1b2879181933b4625492eb6"
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index1.htm",
-      "etag": "W/\"68ea0c21-7005\"",
-      "last_modified": "Sat, 11 Oct 2025 07:49:53 GMT",
+      "etag": "W/\"68ea9f1d-7005\"",
+      "last_modified": "Sat, 11 Oct 2025 18:17:01 GMT",
       "content_hash": "6d7d370214935091a7fff6f24cb08ec7586ec368f1b2879181933b4625492eb6"
     },
     {
@@ -170,6 +170,240 @@
       "content_hash": ""
     },
     {
+      "url": "https://www.rand.org/topics/children-families-and-communities.html?start=0#topicLandingPageList-1969427548-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/children-families-and-communities.html?start=12#topicLandingPageList-1969427548-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/children-families-and-communities.html?start=24#topicLandingPageList-1969427548-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/cyber-and-data-sciences.html?start=0#topicLandingPageList-435430008-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/cyber-and-data-sciences.html?start=12#topicLandingPageList-435430008-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/cyber-and-data-sciences.html?start=24#topicLandingPageList-435430008-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/education-and-literacy.html?start=0#topicLandingPageList-1672457942-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/education-and-literacy.html?start=12#topicLandingPageList-1672457942-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/education-and-literacy.html?start=24#topicLandingPageList-1672457942-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/energy-and-environment.html?start=0#topicLandingPageList-1130360820-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/energy-and-environment.html?start=12#topicLandingPageList-1130360820-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/energy-and-environment.html?start=24#topicLandingPageList-1130360820-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/health-health-care-and-aging.html?start=0#topicLandingPageList-2050784518-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/health-health-care-and-aging.html?start=12#topicLandingPageList-2050784518-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/health-health-care-and-aging.html?start=24#topicLandingPageList-2050784518-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=0#topicLandingPageList-1814846118-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=12#topicLandingPageList-1814846118-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=24#topicLandingPageList-1814846118-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/infrastructure-and-transportation.html?start=0#topicLandingPageList-876753564-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/infrastructure-and-transportation.html?start=12#topicLandingPageList-876753564-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/infrastructure-and-transportation.html?start=24#topicLandingPageList-876753564-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/international-affairs.html?start=0#topicLandingPageList-728393285-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/international-affairs.html?start=12#topicLandingPageList-728393285-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/international-affairs.html?start=24#topicLandingPageList-728393285-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/law-and-business.html?start=0#topicLandingPageList-1200689853-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/law-and-business.html?start=12#topicLandingPageList-1200689853-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/law-and-business.html?start=24#topicLandingPageList-1200689853-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/national-security.html?start=0#topicLandingPageList-609677611-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/national-security.html?start=12#topicLandingPageList-609677611-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/national-security.html?start=24#topicLandingPageList-609677611-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/science-and-technology.html?start=0#topicLandingPageList-2049255161-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/science-and-technology.html?start=12#topicLandingPageList-2049255161-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/science-and-technology.html?start=24#topicLandingPageList-2049255161-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/social-equity.html?start=0#topicLandingPageList-1898844437-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/social-equity.html?start=12#topicLandingPageList-1898844437-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/social-equity.html?start=24#topicLandingPageList-1898844437-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/workers-and-the-workplace.html?start=0#topicLandingPageList-918846908-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/workers-and-the-workplace.html?start=12#topicLandingPageList-918846908-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.rand.org/topics/workers-and-the-workplace.html?start=24#topicLandingPageList-918846908-form",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
       "url": "https://www.sass.org.cn/1198/list1.htm",
       "etag": "",
       "last_modified": "",
@@ -220,6 +454,45 @@
     "https://www.ciecc.com.cn/col/col2218/index.html?uid=5248&pageNum=2 (undetermined)",
     "https://www.ciecc.com.cn/col/col3963/index.html (undetermined)",
     "https://www.ciecc.com.cn/col/col3963/index.html?uid=5248&pageNum=2 (undetermined)",
+    "https://www.rand.org/topics/children-families-and-communities.html?start=0#topicLandingPageList-1969427548-form (undetermined)",
+    "https://www.rand.org/topics/children-families-and-communities.html?start=12#topicLandingPageList-1969427548-form (undetermined)",
+    "https://www.rand.org/topics/children-families-and-communities.html?start=24#topicLandingPageList-1969427548-form (undetermined)",
+    "https://www.rand.org/topics/cyber-and-data-sciences.html?start=0#topicLandingPageList-435430008-form (undetermined)",
+    "https://www.rand.org/topics/cyber-and-data-sciences.html?start=12#topicLandingPageList-435430008-form (undetermined)",
+    "https://www.rand.org/topics/cyber-and-data-sciences.html?start=24#topicLandingPageList-435430008-form (undetermined)",
+    "https://www.rand.org/topics/education-and-literacy.html?start=0#topicLandingPageList-1672457942-form (undetermined)",
+    "https://www.rand.org/topics/education-and-literacy.html?start=12#topicLandingPageList-1672457942-form (undetermined)",
+    "https://www.rand.org/topics/education-and-literacy.html?start=24#topicLandingPageList-1672457942-form (undetermined)",
+    "https://www.rand.org/topics/energy-and-environment.html?start=0#topicLandingPageList-1130360820-form (undetermined)",
+    "https://www.rand.org/topics/energy-and-environment.html?start=12#topicLandingPageList-1130360820-form (undetermined)",
+    "https://www.rand.org/topics/energy-and-environment.html?start=24#topicLandingPageList-1130360820-form (undetermined)",
+    "https://www.rand.org/topics/health-health-care-and-aging.html?start=0#topicLandingPageList-2050784518-form (undetermined)",
+    "https://www.rand.org/topics/health-health-care-and-aging.html?start=12#topicLandingPageList-2050784518-form (undetermined)",
+    "https://www.rand.org/topics/health-health-care-and-aging.html?start=24#topicLandingPageList-2050784518-form (undetermined)",
+    "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=0#topicLandingPageList-1814846118-form (undetermined)",
+    "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=12#topicLandingPageList-1814846118-form (undetermined)",
+    "https://www.rand.org/topics/homeland-security-and-public-safety.html?start=24#topicLandingPageList-1814846118-form (undetermined)",
+    "https://www.rand.org/topics/infrastructure-and-transportation.html?start=0#topicLandingPageList-876753564-form (undetermined)",
+    "https://www.rand.org/topics/infrastructure-and-transportation.html?start=12#topicLandingPageList-876753564-form (undetermined)",
+    "https://www.rand.org/topics/infrastructure-and-transportation.html?start=24#topicLandingPageList-876753564-form (undetermined)",
+    "https://www.rand.org/topics/international-affairs.html?start=0#topicLandingPageList-728393285-form (undetermined)",
+    "https://www.rand.org/topics/international-affairs.html?start=12#topicLandingPageList-728393285-form (undetermined)",
+    "https://www.rand.org/topics/international-affairs.html?start=24#topicLandingPageList-728393285-form (undetermined)",
+    "https://www.rand.org/topics/law-and-business.html?start=0#topicLandingPageList-1200689853-form (undetermined)",
+    "https://www.rand.org/topics/law-and-business.html?start=12#topicLandingPageList-1200689853-form (undetermined)",
+    "https://www.rand.org/topics/law-and-business.html?start=24#topicLandingPageList-1200689853-form (undetermined)",
+    "https://www.rand.org/topics/national-security.html?start=0#topicLandingPageList-609677611-form (undetermined)",
+    "https://www.rand.org/topics/national-security.html?start=12#topicLandingPageList-609677611-form (undetermined)",
+    "https://www.rand.org/topics/national-security.html?start=24#topicLandingPageList-609677611-form (undetermined)",
+    "https://www.rand.org/topics/science-and-technology.html?start=0#topicLandingPageList-2049255161-form (undetermined)",
+    "https://www.rand.org/topics/science-and-technology.html?start=12#topicLandingPageList-2049255161-form (undetermined)",
+    "https://www.rand.org/topics/science-and-technology.html?start=24#topicLandingPageList-2049255161-form (undetermined)",
+    "https://www.rand.org/topics/social-equity.html?start=0#topicLandingPageList-1898844437-form (undetermined)",
+    "https://www.rand.org/topics/social-equity.html?start=12#topicLandingPageList-1898844437-form (undetermined)",
+    "https://www.rand.org/topics/social-equity.html?start=24#topicLandingPageList-1898844437-form (undetermined)",
+    "https://www.rand.org/topics/workers-and-the-workplace.html?start=0#topicLandingPageList-918846908-form (undetermined)",
+    "https://www.rand.org/topics/workers-and-the-workplace.html?start=12#topicLandingPageList-918846908-form (undetermined)",
+    "https://www.rand.org/topics/workers-and-the-workplace.html?start=24#topicLandingPageList-918846908-form (undetermined)",
     "https://www.sass.org.cn/1198/list1.htm (undetermined)",
     "https://www.sass.org.cn/1198/list2.htm (undetermined)",
     "https://www.sass.org.cn/1201/list.htm (undetermined)",
@@ -227,5 +500,5 @@
     "https://www.sass.org.cn/5867/list.htm (undetermined)",
     "https://www.sass.org.cn/5867/list2.htm (undetermined)"
   ],
-  "total_urls": 34
+  "total_urls": 73
 }

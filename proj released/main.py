@@ -267,6 +267,105 @@ def handler6(chrome_page_render: ChromePageRender, document: HTMLDocument, url_n
     return None
 
 
+def handler11_rand_topics(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    新增：RAND Topics 列表处理器（每组近 30 条）。
+    解析 ul.teasers 列表，抽取 a[href]、h3.title、p.date，输出与既有结构一致。
+    """
+    urls = url_info.get('URLs', []) or []
+    if len(urls) <= 0:
+        return None
+    results = []
+    seen_links = set()
+    max_items = int(url_info.get('MaxItems', 30))
+    for url in urls:
+        html_content = None
+        try:
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=url,
+                selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
+                waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+                print_error_log_to_console=True
+            )
+            if not is_timeout:
+                html_content = chrome_page_render.get_page_source()
+        except Exception:
+            html_content = None
+        if not html_content:
+            continue
+        soup = BeautifulSoup(html_content, 'html.parser')
+        container = soup.select_one('ul.teasers.list.filterable.hasImg') or soup.select_one('ul.teasers.list.hasImg') or soup.select_one('ul.teasers')
+        if container is None:
+            continue
+        for li in container.select('li'):
+            a = li.select_one('a[href]')
+            if a is None or not a.get('href'):
+                continue
+            link = url_join(url, a['href'])
+            if link in seen_links:
+                continue
+            title_node = li.select_one('h3.title') or a.select_one('h3') or li.select_one('h3') or a
+            title_text = title_node.get_text(strip=True) if title_node is not None else ''
+            date_node = li.select_one('p.date') or li.select_one('time')
+            date_text = _rand_parse_en_date_to_iso(date_node.get_text(strip=True)) if date_node is not None else ''
+            seen_links.add(link)
+            results.append((link, title_text, date_text))
+            if len(results) >= max_items:
+                break
+        if len(results) >= max_items:
+            break
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=urls[0]):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text)
+    return None
+
+
+## 删除：原 RAND Research & Commentary 列表处理器已按需求移除
+
+def _rand_parse_en_date_to_iso(date_text: str) -> str:
+    """RAND 列表常用英文日期（如 "Oct 8, 2025"）转为 YYYY-MM-DD。"""
+    if not isinstance(date_text, str):
+        return ''
+    s = date_text.strip()
+    if not s:
+        return ''
+    m0 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', s)
+    if m0:
+        return f"{int(m0.group(1)):04d}-{int(m0.group(2)):02d}-{int(m0.group(3)):02d}"
+    months = {
+        'jan': 1, 'january': 1,
+        'feb': 2, 'february': 2,
+        'mar': 3, 'march': 3,
+        'apr': 4, 'april': 4,
+        'may': 5,
+        'jun': 6, 'june': 6,
+        'jul': 7, 'july': 7,
+        'aug': 8, 'august': 8,
+        'sep': 9, 'sept': 9, 'september': 9,
+        'oct': 10, 'october': 10,
+        'nov': 11, 'november': 11,
+        'dec': 12, 'december': 12
+    }
+    m = re.search(r'([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})', s)
+    if m:
+        mon = months.get(m.group(1).lower(), 0)
+        if mon:
+            return f"{int(m.group(3)):04d}-{mon:02d}-{int(m.group(2)):02d}"
+    m2 = re.search(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})', s)
+    if m2:
+        mon = months.get(m2.group(2).lower(), 0)
+        if mon:
+            return f"{int(m2.group(3)):04d}-{mon:02d}-{int(m2.group(1)):02d}"
+    return s
+
 def handler10_nsd(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     # Beijing University NSD (观点) list handler
     if len(url_info['URLs']) <= 0:
@@ -762,6 +861,207 @@ CDI_URLData = {
     },
 }
 URLData.update(CDI_URLData)
+
+# --------------------------- RAND Corporation 新增站点配置（封装为独立分组） ---------------------------
+RAND_URLData = {
+    '兰德公司(RAND Corporation)（主题-儿童、家庭与社区）': {
+        'URLs': [
+            'https://www.rand.org/topics/children-families-and-communities.html?start=0#topicLandingPageList-1969427548-form',
+            'https://www.rand.org/topics/children-families-and-communities.html?start=12#topicLandingPageList-1969427548-form',
+            'https://www.rand.org/topics/children-families-and-communities.html?start=24#topicLandingPageList-1969427548-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-网络与数据科学）': {
+        'URLs': [
+            'https://www.rand.org/topics/cyber-and-data-sciences.html?start=0#topicLandingPageList-435430008-form',
+            'https://www.rand.org/topics/cyber-and-data-sciences.html?start=12#topicLandingPageList-435430008-form',
+            'https://www.rand.org/topics/cyber-and-data-sciences.html?start=24#topicLandingPageList-435430008-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-教育与读写素养）': {
+        'URLs': [
+            'https://www.rand.org/topics/education-and-literacy.html?start=0#topicLandingPageList-1672457942-form',
+            'https://www.rand.org/topics/education-and-literacy.html?start=12#topicLandingPageList-1672457942-form',
+            'https://www.rand.org/topics/education-and-literacy.html?start=24#topicLandingPageList-1672457942-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-能源与环境）': {
+        'URLs': [
+            'https://www.rand.org/topics/energy-and-environment.html?start=0#topicLandingPageList-1130360820-form',
+            'https://www.rand.org/topics/energy-and-environment.html?start=12#topicLandingPageList-1130360820-form',
+            'https://www.rand.org/topics/energy-and-environment.html?start=24#topicLandingPageList-1130360820-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-健康、医疗与老龄化）': {
+        'URLs': [
+            'https://www.rand.org/topics/health-health-care-and-aging.html?start=0#topicLandingPageList-2050784518-form',
+            'https://www.rand.org/topics/health-health-care-and-aging.html?start=12#topicLandingPageList-2050784518-form',
+            'https://www.rand.org/topics/health-health-care-and-aging.html?start=24#topicLandingPageList-2050784518-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-国土安全与公共安全）': {
+        'URLs': [
+            'https://www.rand.org/topics/homeland-security-and-public-safety.html?start=0#topicLandingPageList-1814846118-form',
+            'https://www.rand.org/topics/homeland-security-and-public-safety.html?start=12#topicLandingPageList-1814846118-form',
+            'https://www.rand.org/topics/homeland-security-and-public-safety.html?start=24#topicLandingPageList-1814846118-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-基础设施与交通运输）': {
+        'URLs': [
+            'https://www.rand.org/topics/infrastructure-and-transportation.html?start=0#topicLandingPageList-876753564-form',
+            'https://www.rand.org/topics/infrastructure-and-transportation.html?start=12#topicLandingPageList-876753564-form',
+            'https://www.rand.org/topics/infrastructure-and-transportation.html?start=24#topicLandingPageList-876753564-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-国际事务）': {
+        'URLs': [
+            'https://www.rand.org/topics/international-affairs.html?start=0#topicLandingPageList-728393285-form',
+            'https://www.rand.org/topics/international-affairs.html?start=12#topicLandingPageList-728393285-form',
+            'https://www.rand.org/topics/international-affairs.html?start=24#topicLandingPageList-728393285-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-法律与商业）': {
+        'URLs': [
+            'https://www.rand.org/topics/law-and-business.html?start=0#topicLandingPageList-1200689853-form',
+            'https://www.rand.org/topics/law-and-business.html?start=12#topicLandingPageList-1200689853-form',
+            'https://www.rand.org/topics/law-and-business.html?start=24#topicLandingPageList-1200689853-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-国家安全）': {
+        'URLs': [
+            'https://www.rand.org/topics/national-security.html?start=0#topicLandingPageList-609677611-form',
+            'https://www.rand.org/topics/national-security.html?start=12#topicLandingPageList-609677611-form',
+            'https://www.rand.org/topics/national-security.html?start=24#topicLandingPageList-609677611-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-科学与技术）': {
+        'URLs': [
+            'https://www.rand.org/topics/science-and-technology.html?start=0#topicLandingPageList-2049255161-form',
+            'https://www.rand.org/topics/science-and-technology.html?start=12#topicLandingPageList-2049255161-form',
+            'https://www.rand.org/topics/science-and-technology.html?start=24#topicLandingPageList-2049255161-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-社会公平）': {
+        'URLs': [
+            'https://www.rand.org/topics/social-equity.html?start=0#topicLandingPageList-1898844437-form',
+            'https://www.rand.org/topics/social-equity.html?start=12#topicLandingPageList-1898844437-form',
+            'https://www.rand.org/topics/social-equity.html?start=24#topicLandingPageList-1898844437-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+    '兰德公司(RAND Corporation)（主题-劳动者与工作场所）': {
+        'URLs': [
+            'https://www.rand.org/topics/workers-and-the-workplace.html?start=0#topicLandingPageList-918846908-form',
+            'https://www.rand.org/topics/workers-and-the-workplace.html?start=12#topicLandingPageList-918846908-form',
+            'https://www.rand.org/topics/workers-and-the-workplace.html?start=24#topicLandingPageList-918846908-form',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main#page-content'),
+            ('css', 'ul.teasers')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler10.svg',
+        'MaxItems': 30,
+        'HTMLContentHandler': handler11_rand_topics
+    },
+}
+
+URLData.update(RAND_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |

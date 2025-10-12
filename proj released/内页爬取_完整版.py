@@ -528,6 +528,89 @@ def parse_cdi_article(soup, url, publish_date):
         print(f"解析综合开发研究院页面 {url} 失败: {e}")
         return None
 
+def parse_rand_article(soup, url, publish_date):
+    """解析 RAND 文章页。
+    - 标题优先 h1#RANDTitleHeadingId / article h1 / meta og:title
+    - 正文优先 <article>，否则退化到通用正文提取
+    - 日期优先 JSON-LD 的 datePublished，再退化到传入 publish_date
+    - 附件提取页面内的 PDF/DOC/XLS 等链接
+    """
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('h1#RANDTitleHeadingId') or
+            soup.select_one('article h1') or
+            soup.select_one('div.head h1') or
+            soup.select_one('h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 正文
+        content = ''
+        art = soup.select_one('article')
+        if art and art.get_text(strip=True):
+            content = clean_text(art.get_text("\n"))
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期：JSON-LD datePublished -> YYYY-MM-DD
+        pub = ''
+        try:
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{1,2})-(\d{1,2})"', txt)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        except Exception:
+            pass
+        if not pub:
+            # 备选 meta
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 附件（同域绝对化）
+        attachments = []
+        container = art or soup
+        for a in container.select('a[href]'):
+            href = a.get('href', '')
+            lower = href.lower()
+            if any(lower.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                attachments.append(url_join(url, href))
+        attach_str = ' ; '.join(attachments)
+
+        if not title or not content:
+            print(f"RAND 文章解析失败（标题或正文为空）: {url}")
+            return None
+
+        data = {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': '兰德公司（RAND Corporation）',
+            'thinkank_name': '兰德公司（RAND Corporation）',
+            'summary': '',
+            'content': content,
+            'attachments': attach_str,
+            'crawl_date': get_current_date()
+        }
+        return data
+    except Exception as e:
+        print(f"解析 RAND 页面失败: {url} 错误: {e}")
+        return None
+
 def parse_wechat_article(soup, url, publish_date):
     """解析微信文章（mp.weixin.qq.com）"""
     try:
@@ -714,6 +797,8 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             return parse_sass_article(soup, url, publish_date)
         elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
             return parse_cdi_article(soup, url, publish_date)
+        elif 'www.rand.org' in url or 'rand.org' in url:
+            return parse_rand_article(soup, url, publish_date)
         elif 'mp.weixin.qq.com' in url:
             return parse_wechat_article(soup, url, publish_date)
         elif 'nsd.pku.edu.cn' in url:
