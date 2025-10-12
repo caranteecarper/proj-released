@@ -10,6 +10,41 @@ from urllib.parse import urljoin as url_join
 # 明确禁用系统代理，避免 HTTPS 站点走到失效代理
 NO_PROXIES = {"http": None, "https": None}
 
+# ------------------------------ RAND 专用文本工具 ------------------------------
+def _lines_filter_noise(lines):
+    """过滤明显的元信息/订阅/分享等噪声行。"""
+    patterns = [
+        r'^Subscribe\b', r'newsletter', r'^Share on ', r'@RANDCorporation', r'^For Media', r'^By\s+\w',
+        r'^Published\s+in:', r'^Published\s+on', r'Posted on rand\.org', r'^Photo by', r'^Copyright',
+        r'RAND\s+Education,?\s+Employment,?\s+and\s+Infrastructure', r'RAND\s+Europe',
+        r'^Cite this', r'^BibTeX$', r'^RIS$', r'^Email$', r'^LinkedIn$', r'^Facebook$', r'^Twitter$'
+    ]
+    res = []
+    for ln in lines:
+        s = (ln or '').strip()
+        if not s:
+            continue
+        bad = False
+        for pat in patterns:
+            if re.search(pat, s, re.I):
+                bad = True
+                break
+        if not bad:
+            res.append(s)
+    return res
+
+def _text_from_container(node):
+    """提取容器内 p/li 文本，拼接并去噪。"""
+    if node is None:
+        return ''
+    ps = []
+    for p in node.select('p, li'):
+        t = p.get_text(" ", strip=True)
+        if t:
+            ps.append(t)
+    ps = _lines_filter_noise(ps)
+    return clean_text("\n".join(ps))
+
 # ------------------------------ 通用工具函数与回退提取 ------------------------------
 
 def get_current_date():
@@ -611,6 +646,107 @@ def parse_rand_article(soup, url, publish_date):
         print(f"解析 RAND 页面失败: {url} 错误: {e}")
         return None
 
+def parse_rand_article2(soup, url, publish_date):
+    """改进版：优先抽取 RAND 出版物摘要，过滤订阅/分享等噪声，兜底 meta 摘要。"""
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('h1#RANDTitleHeadingId') or
+            soup.select_one('article h1') or
+            soup.select_one('div.head h1') or
+            soup.select_one('h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 正文/摘要
+        content = ''
+        art = None
+        for sel in [
+            'div.product-main div.abstract.product-page-abstract',
+            'div.product-main div.abstract',
+            'section.abstract',
+            'div#abstract',
+            'div.abstract-first-letter',
+        ]:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = _text_from_container(node)
+                if content:
+                    break
+        if not content:
+            art = soup.select_one('article.blog') or soup.select_one('article')
+            if art and art.get_text(strip=True):
+                content = _text_from_container(art)
+        if not content:
+            trn = soup.select_one('#transcript, div.transcript, section.transcript')
+            if trn and trn.get_text(strip=True):
+                content = _text_from_container(trn)
+        if not content:
+            meta_abs = soup.select_one('meta[name="citation_abstract"][content]')
+            if meta_abs and meta_abs.get('content'):
+                content = clean_text(meta_abs['content'])
+        if not content:
+            meta_desc = soup.select_one('meta[property="og:description"][content]') or soup.select_one('meta[name="description"][content]')
+            if meta_desc and meta_desc.get('content'):
+                content = clean_text(meta_desc['content'])
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期
+        pub = ''
+        try:
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{1,2})-(\d{1,2})"', txt)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        except Exception:
+            pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 附件
+        attachments = []
+        container = art or soup
+        for a in container.select('a[href]'):
+            href = a.get('href', '')
+            lower = href.lower()
+            if any(lower.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                attachments.append(url_join(url, href))
+        attach_str = ' ; '.join(attachments)
+
+        if not title or not content:
+            print(f"RAND 文章解析失败：正文为空: {url}")
+            return None
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': '兰德公司（RAND Corporation）',
+            'thinkank_name': '兰德公司（RAND Corporation）',
+            'summary': '',
+            'content': content,
+            'attachments': attach_str,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 RAND 页面失败: {url} 错误: {e}")
+        return None
+
 def parse_wechat_article(soup, url, publish_date):
     """解析微信文章（mp.weixin.qq.com）"""
     try:
@@ -798,7 +934,8 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
             return parse_cdi_article(soup, url, publish_date)
         elif 'www.rand.org' in url or 'rand.org' in url:
-            return parse_rand_article(soup, url, publish_date)
+            # 使用改进版解析器，优先提取摘要正文
+            return parse_rand_article2(soup, url, publish_date)
         elif 'mp.weixin.qq.com' in url:
             return parse_wechat_article(soup, url, publish_date)
         elif 'nsd.pku.edu.cn' in url:
@@ -973,5 +1110,43 @@ def main():
     except Exception as e:
         print(f"程序执行过程中发生错误: {e}")
 
+def _identify_problematic_rand_urls_from_file(json_path='output_complete.json'):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    urls = []
+    import re
+    for it in data:
+        u = (it.get('url') or '').lower()
+        if 'rand.org' not in u:
+            continue
+        content = (it.get('content') or '').strip()
+        too_short = len(content) < 300
+        meta_sign = bool(re.search(r'(Published in:|Posted on rand\.org|RESEARCH\s+—|Published on|This commentary was originally published|RAND Europe|Keywords:)', content, re.I))
+        if too_short or meta_sign:
+            urls.append(it.get('url'))
+    return urls
+
+def _remove_items_by_urls_file(json_path, remove_urls):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        data = []
+    s = set(remove_urls or [])
+    kept = [it for it in data if (it.get('url') or '') not in s]
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(kept, f, ensure_ascii=False, indent=2, default=str)
+    return len(data), len(kept)
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--repair-rand':
+        urls = _identify_problematic_rand_urls_from_file('output_complete.json')
+        print(f"检测到需修复的 RAND 条目: {len(urls)}")
+        before, after = _remove_items_by_urls_file('output_complete.json', urls)
+        print(f"已移除 {before-after} 条，剩余 {after} 条。")
+    else:
+        main()
