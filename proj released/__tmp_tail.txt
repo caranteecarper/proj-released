@@ -1,9 +1,0 @@
-﻿        # 保存结果
-        if lst:
-            with open('output_complete.json', 'w', encoding='utf-8') as f:
-                json.dump(lst, f, ensure_ascii=False, indent=2, default=str)
-            print(f"结果已保存到 output_complete.json")
-        else:
-            print("没有成功爬取到任何文章")
-            
-    except Exception as e:
