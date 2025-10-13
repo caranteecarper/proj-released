@@ -750,7 +750,11 @@ def parse_rand_article2(soup, url, publish_date):
 def parse_jpm_article(soup, url, publish_date):
     """解析 摩根大通研究院 JPMorgan Insights 详情页
     - 标题：优先 h1 / meta og:title
-    - 正文：优先常见正文容器，回退通用提取
+    - 摘要与正文分离：
+        1) 先在 article 中按阅读顺序收集 h2/h3/p/li
+        2) 若存在标题为 "Overview" 的小节，则该小节（至下一小节前）的段落作为 summary；其后作为 content
+        3) 否则，取首段起连续 2~3 个段落为 summary；从第一个 h2/h3 起直至文末为 content
+        4) 若 summary 为空，则用 meta 描述兜底；content 若过短再回退通用正文提取
     - 日期：JSON-LD datePublished > meta article:published_time > <time>
     - 作者：JSON-LD author / meta[name=author] / 页面作者节点
     - 附件：优先文档（pdf/doc/xls/ppt），若无则回退音视频（audio/video/iframe/m3u8/mp3 等）
@@ -771,18 +775,169 @@ def parse_jpm_article(soup, url, publish_date):
             if meta_title and meta_title.get('content'):
                 title = clean_text(meta_title['content'])
 
-        # 正文
-        content = ''
-        for sel in [
-            'article .content', 'article .rich-text', 'article .article-content', 'article',
-            '.rich-text', '.article-content', '.content', '#content'
-        ]:
-            node = soup.select_one(sel)
-            if node and node.get_text(strip=True):
-                content = clean_text(node.get_text("\n"))
-                break
+        # 摘要 + 正文（按结构切分）
+        def _clean_inline_footnotes(node):
+            try:
+                # 移除脚注上标及页内脚注链接
+                for x in list(node.select('sup, a[href^="#footnote"], a[href^="#fn"], a.footnote')):
+                    x.decompose()
+            except Exception:
+                pass
+            return node
+
+        def _collect_nodes(root):
+            nodes = []
+            if not root:
+                return nodes
+            # 优先 article 下的富文本块
+            blocks = root.select('div.cmp-text--pt div.cmp-text')
+            if not blocks:
+                # 退化为 article 整体
+                blocks = [root]
+            for blk in blocks:
+                _clean_inline_footnotes(blk)
+                for n in blk.select('h2, h3, p, li'):
+                    # h2/h3 内常包裹 span.section-header
+                    t = clean_text(n.get_text(" "))
+                    if not t:
+                        continue
+                    bad = False
+                    for pat in [
+                        r'^Share\b', r'^Subscribe\b', r'^Related ', r'^For media', r'^Media Contacts',
+                        r'^Disclaimer', r'^Cite this', r'^References$', r'^Footnotes$', r'^Copyright'
+                    ]:
+                        if re.search(pat, t, re.I):
+                            bad = True
+                            break
+                    if not bad:
+                        nodes.append((n.name.lower(), t))
+            return nodes
+
+        article_root = soup.select_one('main article') or soup.select_one('article')
+        nodes = _collect_nodes(article_root)
+
+        def _split_summary_content(nodes):
+            if not nodes:
+                return '', ''
+            # 找到第一个 h2/h3
+            first_h_idx = -1
+            for i, (tag, txt) in enumerate(nodes):
+                if tag in ('h2', 'h3'):
+                    first_h_idx = i
+                    break
+            # 查找 Overview 小节
+            ov_idx = -1
+            for i, (tag, txt) in enumerate(nodes):
+                if tag in ('h2', 'h3') and re.search(r'\boverview\b', txt, re.I):
+                    ov_idx = i
+                    break
+            summary_parts = []
+            content_parts = []
+            if ov_idx != -1:
+                # 摘要：Overview 之后直到下一个小节前的 p/li
+                j = ov_idx + 1
+                while j < len(nodes) and nodes[j][0] not in ('h2', 'h3'):
+                    if nodes[j][0] in ('p', 'li'):
+                        summary_parts.append(nodes[j][1])
+                    j += 1
+                # 正文：从 j 起至文末
+                for k in range(j, len(nodes)):
+                    tag, txt = nodes[k]
+                    if tag in ('h2', 'h3'):
+                        content_parts.append(txt)
+                    elif tag in ('p', 'li'):
+                        content_parts.append(txt)
+            else:
+                # 首段起连续 2~3 个段落为摘要（不跨小节）
+                i = 0
+                added = 0
+                while i < len(nodes) and nodes[i][0] not in ('h2', 'h3'):
+                    if nodes[i][0] in ('p', 'li'):
+                        summary_parts.append(nodes[i][1])
+                        added += 1
+                        if added >= 3:
+                            break
+                    i += 1
+                # 正文：从第一个小节开始（如存在），否则从剩余段落开始
+                start = first_h_idx if first_h_idx != -1 else i + 1
+                for k in range(max(0, start), len(nodes)):
+                    tag, txt = nodes[k]
+                    if tag in ('h2', 'h3'):
+                        content_parts.append(txt)
+                    elif tag in ('p', 'li'):
+                        content_parts.append(txt)
+            return clean_text('\n'.join(summary_parts)), clean_text('\n'.join(content_parts))
+
+        summary, content = _split_summary_content(nodes)
+        if not summary:
+            meta_desc = soup.select_one('meta[property="og:description"][content]') or soup.select_one('meta[name="description"][content]')
+            if meta_desc and meta_desc.get('content'):
+                summary = clean_text(meta_desc['content'])
         if not content:
-            content = generic_content_by_candidates(soup)
+            # 回退：聚合多个文本容器
+            content = ''
+            for sel in ['article .cmp-text', 'article .rich-text', 'article .article-content', 'article .content', 'article']:
+                node = soup.select_one(sel)
+                if node and node.get_text(strip=True):
+                    _clean_inline_footnotes(node)
+                    content = clean_text(node.get_text('\n'))
+                    if content:
+                        break
+        # 若正文仍过短（<200词），尝试浏览器渲染获取后再解析一次；最后再回退通用解析
+        def _word_count(s: str) -> int:
+            try:
+                return len([w for w in re.split(r'\s+', s.strip()) if w])
+            except Exception:
+                return 0
+        if _word_count(content) < 200:
+            # 浏览器渲染兜底（仅 JPM 调用）
+            try:
+                from selenium.webdriver.chrome.options import Options as _ChromeOptions
+                import undetected_chromedriver as _uc
+                from selenium.webdriver.common.by import By as _By
+                from selenium.webdriver.support.ui import WebDriverWait as _Wait
+                from selenium.webdriver.support import expected_conditions as _EC
+                _opts = _ChromeOptions()
+                try:
+                    _opts.page_load_strategy = 'none'
+                except Exception:
+                    pass
+                _opts.add_argument('--disable-blink-features=AutomationControlled')
+                _opts.add_argument('--ignore-certificate-errors')
+                _opts.add_argument('--ignore-ssl-errors')
+                _opts.add_argument('--disable-site-isolation-trials')
+                _opts.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                _driver = _uc.Chrome(options=_opts)
+                try:
+                    _driver.get(url)
+                    try:
+                        _Wait(_driver, 20).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'main article')))
+                        # 文章富文本块
+                        _Wait(_driver, 10).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'main article .cmp-text--pt, main article .cmp-text')))
+                    except Exception:
+                        pass
+                    html2 = _driver.page_source
+                finally:
+                    try:
+                        _driver.quit()
+                    except Exception:
+                        pass
+                if html2:
+                    sp2 = BeautifulSoup(html2, 'lxml')
+                    art2 = sp2.select_one('main article') or sp2.select_one('article')
+                    nodes2 = _collect_nodes(art2)
+                    summary2, content2 = _split_summary_content(nodes2)
+                    if summary2:
+                        summary = summary2
+                    if _word_count(content2) > _word_count(content):
+                        content = content2
+            except Exception:
+                pass
+            # 最终回退
+            if _word_count(content) < 200:
+                alt = generic_content_by_candidates(soup)
+                if _word_count(alt) > _word_count(content):
+                    content = alt
 
         # 日期（英文到 YYYY-MM-DD）
         pub = ''
@@ -931,13 +1086,221 @@ def parse_jpm_article(soup, url, publish_date):
             'publish_date': pub,
             'authors': authors,
             'thinkank_name': '摩根大通研究院',
-            'summary': '',
+            'summary': summary,
             'content': content,
             'attachments': attachments,
             'crawl_date': get_current_date()
         }
     except Exception as e:
         print(f"解析 JPM 页面失败: {url} 错误: {e}")
+        return None
+
+def parse_kpmg_article(soup, url, publish_date):
+    """解析 毕马威中国(KPMG) 洞察文章页
+    字段规则：
+    - title: 优先 h1 或 og:title
+    - content: 优先正文容器；兜底 generic_content_by_candidates
+    - publish_date: 优先 JSON-LD 的 datePublished/dateCreated/dateModified；
+                    其次 meta[article:published_time]；再其次 <time datetime>
+                    最终兜底列表页传入 publish_date；统一 YYYY-MM-DD
+    - authors: 优先 JSON-LD author；其次 meta[name=author]；再次页面作者节点
+    - attachments: 若存在文档附件(\n    .pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx) 则只返回这些文件；
+                   否则若有音/视频(.mp3/.m4a/.wav/.mp4/.m3u8/.mov/.m4v) 返回其 URL；
+                   否则为空
+    - thinkank_name: 固定 "毕马威中国(KPMG)"
+    """
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('main article h1') or
+            soup.select_one('article h1') or
+            soup.select_one('div.article-title h1') or
+            soup.select_one('h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]') or soup.select_one('meta[name="title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 正文
+        content = ''
+        content_selectors = [
+            'main article', 'article .rich-text', 'article .cmp-text', 'article .text', 'article',
+            'div.article-content', 'div.cmp-text', 'div.rich-text', 'div.content', '#content'
+        ]
+        for sel in content_selectors:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                if content:
+                    break
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期
+        pub = ''
+        try:
+            import json as _json
+            def _find_date(obj):
+                if isinstance(obj, dict):
+                    for k in ['datePublished', 'dateCreated', 'dateModified']:
+                        v = obj.get(k)
+                        if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
+                            return v
+                    # 结构化对象里嵌套情况
+                    for v in obj.values():
+                        r = _find_date(v)
+                        if r:
+                            return r
+                elif isinstance(obj, list):
+                    for it in obj:
+                        r = _find_date(it)
+                        if r:
+                            return r
+                return ''
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                if not txt.strip():
+                    continue
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    continue
+                d = _find_date(data)
+                if d:
+                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
+                    if m:
+                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                        break
+        except Exception:
+            pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            t = soup.select_one('time[datetime]')
+            if t and t.get('datetime'):
+                m3 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', t.get('datetime'))
+                if m3:
+                    pub = f"{int(m3.group(1)):04d}-{int(m3.group(2)):02d}-{int(m3.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 作者
+        authors = ''
+        try:
+            import json as _json
+            names = []
+            def _add_name(x):
+                if isinstance(x, str) and x.strip():
+                    names.append(clean_text(x))
+                elif isinstance(x, dict):
+                    n = x.get('name') or x.get('author') or x.get('creator')
+                    if isinstance(n, str) and n.strip():
+                        names.append(clean_text(n))
+                    elif isinstance(n, list):
+                        for e in n:
+                            _add_name(e)
+                elif isinstance(x, list):
+                    for e in x:
+                        _add_name(e)
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                if not txt.strip():
+                    continue
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    continue
+                if isinstance(data, dict) and 'author' in data:
+                    _add_name(data.get('author'))
+                elif isinstance(data, list):
+                    for obj in data:
+                        if isinstance(obj, dict) and 'author' in obj:
+                            _add_name(obj.get('author'))
+            if not names:
+                meta_author = soup.select_one('meta[name="author"][content]')
+                if meta_author and meta_author.get('content'):
+                    names.append(clean_text(meta_author['content']))
+            if not names:
+                for sel in [
+                    '[class*="author" i]',
+                    'a[href*="/people" i]',
+                    'a[href*="/authors" i]',
+                    'a[href*="/insights/author" i]'
+                ]:
+                    node = soup.select_one(sel)
+                    if node and node.get_text(strip=True):
+                        names.append(clean_text(node.get_text()))
+                        break
+            if names:
+                seen = set()
+                uniq = []
+                for n in names:
+                    if n and n not in seen:
+                        seen.add(n)
+                        uniq.append(n)
+                authors = '、'.join(uniq)
+        except Exception:
+            authors = ''
+
+        # 附件：优先文档，其次音/视频
+        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
+        file_urls, media_urls = [], []
+        container = soup.select_one('article') or soup.select_one('.content') or soup
+        for a in container.select('a[href]'):
+            href = a.get('href', '')
+            if not href:
+                continue
+            lower = href.lower()
+            full = url_join(url, href)
+            if any(lower.endswith(ext) for ext in file_exts):
+                file_urls.append(full)
+            elif any(lower.endswith(ext) for ext in media_exts):
+                media_urls.append(full)
+        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
+            for node in container.select(sel):
+                src = node.get('src', '')
+                if not src:
+                    continue
+                lower = src.lower()
+                full = url_join(url, src)
+                if any(lower.endswith(ext) for ext in file_exts):
+                    file_urls.append(full)
+                elif any(ext in lower for ext in media_exts):
+                    media_urls.append(full)
+
+        attachments = ''
+        if file_urls:
+            attachments = ' ; '.join(file_urls)
+        elif media_urls:
+            attachments = ' ; '.join(media_urls)
+
+        if not title or not content:
+            print(f"KPMG 文章解析失败：标题或正文为空: {url}")
+            return None
+
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': authors,
+            'thinkank_name': '毕马威中国(KPMG)',
+            'summary': '',
+            'content': content,
+            'attachments': attachments,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 KPMG 页面失败: {url} 错误: {e}")
         return None
 
 def parse_wechat_article(soup, url, publish_date):
@@ -1126,6 +1489,8 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             return parse_sass_article(soup, url, publish_date)
         elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
             return parse_cdi_article(soup, url, publish_date)
+        elif 'kpmg.com' in url or 'www.kpmg.com' in url:
+            return parse_kpmg_article(soup, url, publish_date)
         elif 'jpmorgan.com' in url or 'www.jpmorgan.com' in url:
             return parse_jpm_article(soup, url, publish_date)
         elif 'www.rand.org' in url or 'rand.org' in url:
@@ -1339,10 +1704,37 @@ def _remove_items_by_urls_file(json_path, remove_urls):
 
 if __name__ == "__main__":
     import sys
+    # JPM repair helpers (content too short => re-crawl). Threshold: 200 words.
+    def _count_words_en(s: str) -> int:
+        try:
+            return len([w for w in re.split(r'\s+', (s or '').strip()) if w])
+        except Exception:
+            return 0
+
+    def _identify_problematic_jpm_urls_from_file(json_path='output_complete.json', word_threshold=200):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        urls = []
+        for it in data:
+            u = (it.get('url') or '').lower()
+            if 'jpmorgan.com' not in u:
+                continue
+            content = (it.get('content') or '').strip()
+            if _count_words_en(content) < word_threshold:
+                urls.append(it.get('url'))
+        return urls
     if len(sys.argv) > 1 and sys.argv[1] == '--repair-rand':
         urls = _identify_problematic_rand_urls_from_file('output_complete.json')
         print(f"检测到需修复的 RAND 条目: {len(urls)}")
         before, after = _remove_items_by_urls_file('output_complete.json', urls)
         print(f"已移除 {before-after} 条，剩余 {after} 条。")
+    elif len(sys.argv) > 1 and sys.argv[1] == '--repair-jpm':
+        urls = _identify_problematic_jpm_urls_from_file('output_complete.json', word_threshold=200)
+        print(f"检测到待修复的 JPM 条目: {len(urls)} (content 词数 < 200)")
+        before, after = _remove_items_by_urls_file('output_complete.json', urls)
+        print(f"已移除 {before-after} 条，剩余 {after} 条。请再次运行本脚本以重抓这些链接。")
     else:
         main()

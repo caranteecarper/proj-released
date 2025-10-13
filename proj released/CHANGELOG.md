@@ -10,4 +10,11 @@
   - 详情页：新增 `parse_jpm_article`，实现标题、正文、日期（JSON-LD/Meta/Time）解析；作者优先提取页面作者（JSON-LD 或 meta/DOM），`thinkank_name` 统一为“摩根大通研究院”。
   - 附件策略：优先提取文件类附件（pdf/doc/xls/ppt 等）；若仅有音频/视频则将音视频 URL 作为附件；若文件与音视频并存，仅保留文件附件。
   - 未更改现有统一等待/超时与渲染逻辑；不新增额外文件。
+# CHANGELOG
+
+## 2025-10-13
+- 新增：KPMG 中国（毕马威中国）洞察列表抓取与渲染
+  - main.py：新增 `handler14_kpmg_insights`，进入 `https://kpmg.com/cn/zh/home/insights.html`，先处理 Cookie 同意，再通过滚动加载收集前 40 条，渲染到主页；加入 `KPMG_URLData` 站点配置（Logo `./Logos/handler14_KPMG_zh.png`）。
+  - 内页爬取_完整版.py：新增 `parse_kpmg_article` 并接入路由（kpmg.com），解析标题、日期（JSON-LD/Meta/Time 兜底）、正文与附件（优先文档，若无文档则音/视频），authors 能检测到则填姓名，`thinkank_name` 统一为“毕马威中国(KPMG)”。
+  - 行为保持与既有流程一致，输出结构不变。
 

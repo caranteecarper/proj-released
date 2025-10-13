@@ -443,7 +443,7 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
             'button[class*="cookie"][class*="accept"]',
         ]:
             try:
-                is_timeout = chrome_page_render.click_on_html_element(
+                is_timeout = _local_cpr.click_on_html_element(
                     click_element_selector_type='css',
                     click_element_selector_rule=sel,
                     use_javascript=True,
@@ -467,7 +467,7 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
         ]
         for sel in selectors:
             try:
-                timed_out = chrome_page_render.click_on_html_element(
+                timed_out = _local_cpr.click_on_html_element(
                     click_element_selector_type='css',
                     click_element_selector_rule=sel,
                     use_javascript=True,
@@ -483,69 +483,104 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
 
     max_items = int(url_info.get('MaxItems', 80))
     base_url = urls[0]
-    # Open and wait for initial content
+
+    # Use a dedicated undetected driver for JPM to ensure dynamic grid loads reliably
+    local_options = ChromeOptions()
     try:
-        # Wait for All Insights grid to be present
-        is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+        local_options.page_load_strategy = 'none'
+    except Exception:
+        pass
+    local_options.add_argument('--disable-blink-features=AutomationControlled')
+    local_options.add_argument('--ignore-certificate-errors')
+    local_options.add_argument('--ignore-ssl-errors')
+    local_options.add_argument('--allow-running-insecure-content')
+    local_options.add_argument('--disable-web-security')
+    local_options.add_argument('--disable-site-isolation-trials')
+    local_options.add_argument('--test-type')
+    local_options.set_capability('acceptInsecureCerts', True)
+    local_options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    )
+
+    _local_cpr = ChromePageRender(
+        chrome_driver_filepath=__chrome_driver_path,
+        options=local_options,
+        use_undetected_chromedriver=True
+    )
+    try:
+        # Open and wait for the insights grid to mount
+        is_timeout = _local_cpr.goto_url_waiting_for_selectors(
             url=base_url,
             selector_types_rules=[
                 ('css', '#all-insights'),
-                ('css', '#all-insights .cmp-dynamic-grid-content ul.grid')
             ],
             waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
             print_error_log_to_console=True
         )
-    except Exception:
-        is_timeout = True
-    if is_timeout:
-        return None
+        if is_timeout:
+            return None
 
-    _try_accept_cookies()
-
-    # Poll for the insights grid to load client-side
-    results = []
-    max_wait = int(url_info.get('WaitingTimeLimitInSeconds', 10))
-    for _ in range(max(6, max_wait * 2)):  # 0.5s x loops
+        # Scroll the insights section into view to trigger lazy loading
         try:
-            html = chrome_page_render.get_page_source()
+            _local_cpr.click_on_html_element(
+                click_element_selector_type='css',
+                click_element_selector_rule='#all-insights',
+                use_javascript=True,
+                max_trials_for_unstable_page=1,
+                click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                print_error_log_to_console=False
+            )
         except Exception:
-            html = ''
-        results = _extract_items(html, base_url)
-        if results:
-            break
-        sleep(0.5)
+            pass
 
-    # Keep clicking load-more while we need more items
-    while len(results) < max_items:
-        before = len(results)
-        clicked = _try_click_load_more()
-        if not clicked:
-            break
-        # Wait for more items to appear
-        for _ in range(20):
-            sleep(0.5)
-            try:
-                html = chrome_page_render.get_page_source()
-            except Exception:
-                html = ''
+        # Poll for the insights grid list to load
+        results = []
+        max_wait = int(url_info.get('WaitingTimeLimitInSeconds', 10))
+        for _ in range(max(10, max_wait * 3)):  # 0.5s x loops
+            html = _local_cpr.get_page_source()
             results = _extract_items(html, base_url)
-            if len(results) > before:
+            if results:
                 break
-        if len(results) <= before:
-            break
+            sleep(0.5)
 
-    # Render collected items
-    with document.body:
-        with HTMLTags.div(cls='page-board'):
-            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
-            with HTMLTags.a(href=base_url):
-                HTMLTags.h2(url_name)
-            for (a_href, h3_text, span_text) in results[:max_items]:
-                with HTMLTags.div(cls='page-board-item'):
-                    with HTMLTags.a(href=a_href):
-                        HTMLTags.h3(h3_text)
-                        HTMLTags.span(span_text or '')
-    return None
+        # Keep clicking load-more while we need more items
+        while len(results) < max_items:
+            before = len(results)
+            clicked = _try_click_load_more()
+            if not clicked:
+                break
+            for _ in range(24):  # wait up to ~12s for new cards
+                sleep(0.5)
+                html = _local_cpr.get_page_source()
+                results = _extract_items(html, base_url)
+                if len(results) > before:
+                    break
+            if len(results) <= before:
+                break
+
+        # Render collected items to the main document (same format as others)
+        try:
+            print(f"JPM handler: collected {len(results)} items (limit {max_items}).")
+        except Exception:
+            pass
+        with document.body:
+            with HTMLTags.div(cls='page-board'):
+                HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+                with HTMLTags.a(href=base_url):
+                    HTMLTags.h2(url_name)
+                for (a_href, h3_text, span_text) in results[:max_items]:
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(h3_text)
+                            HTMLTags.span(span_text or '')
+        return None
+    finally:
+        try:
+            _local_cpr.close()
+        except Exception:
+            pass
 
 ## 删除：原 RAND Research & Commentary 列表处理器已按需求移除
 
@@ -707,6 +742,246 @@ def handler10_nsd(chrome_page_render: ChromePageRender, document: HTMLDocument, 
                         with HTMLTags.a(href=a_href):
                             HTMLTags.h3(h3_text)
                             HTMLTags.span(span_text)
+    return None
+
+
+def handler14_kpmg_insights(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    KPMG China Insights list handler (scroll-to-load, take first N items)
+
+    Behavior
+    - Open the insights page and wait for results container to appear.
+    - Best-effort accept cookie/consent banners.
+    - Repeatedly scroll to the bottom to trigger client-side loading until
+      at least `MaxItems` items are collected or no further growth observed.
+    - Extract (link, title, date?) from grid tiles and render to document.
+
+    HTML patterns (best-effort and resilient):
+    - Root: section.module-resultslisting
+    - Container: #resultsListingContainer or div.resultslistContainer
+    - Items: div.grid-tiles ... with an anchor carrying href to /insights/...
+      Title nodes may be h3/h2 or elements with class containing title.
+      Date nodes may be <time datetime> or visible date text.
+    """
+    urls = url_info.get('URLs', []) or []
+    if len(urls) <= 0:
+        return None
+
+    base_url = urls[0]
+    max_items = int(url_info.get('MaxItems', 40))
+
+    def _try_accept_cookies():
+        # Common consent buttons (OneTrust and variations)
+        candidates = [
+            ('css', 'button#onetrust-accept-btn-handler'),
+            ('css', 'button[aria-label*="accept all" i]'),
+            ('css', 'button[aria-label*="accept" i]'),
+            ('css', 'button[aria-label*="同意" i]'),
+            ('css', 'button[title*="接受" i], button[title*="同意" i]'),
+            ('css', 'button[class*="cookie" i][class*="accept" i]'),
+            # Text-based fallbacks
+            ('xpath', "//button[contains(., '接受') or contains(., '同意') or contains(., '允许') or contains(., '接受所有') or contains(., '同意所有')]"),
+            ('xpath', "//a[contains(., '接受') or contains(., '同意')]"),
+        ]
+        for (typ, sel) in candidates:
+            try:
+                is_timeout = chrome_page_render.click_on_html_element(
+                    click_element_selector_type=typ,
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if is_timeout is False:
+                    break
+            except Exception:
+                continue
+
+    def _parse_date_to_iso(s: str) -> str:
+        """Parse visible date text to YYYY-MM-DD if possible; else return ''."""
+        try:
+            if not isinstance(s, str):
+                return ''
+            s = s.strip()
+            if not s:
+                return ''
+            # 2025-10-08 / 2025/10/08 / 2025.10.08
+            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            # 2025年10月08日 或 2025年10月8日
+            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        except Exception:
+            pass
+        return ''
+
+    def _extract_items(html: str, base: str):
+        soup = BeautifulSoup(html, 'html.parser')
+        # Scope to results listing
+        root = soup.select_one('#resultsListingContainer') or soup.select_one('div.resultslistContainer') or soup.select_one('section.module-resultslisting') or soup
+        items = []
+        seen = set()
+        # Likely tile nodes with anchors
+        tiles = root.select('div.grid-tiles')
+        if not tiles:
+            tiles = root.select('div[class*="grid"] div[class*="tiles"], div[class*="results"] li, div[class*="results"] article')
+        for node in tiles:
+            a = node.select_one('a[href]')
+            if not a or not a.get('href'):
+                continue
+            href = url_join(base, a['href'])
+            if href in seen:
+                continue
+            # Avoid nav anchors
+            if a.find_parent('nav') is not None:
+                continue
+            # Title
+            title_node = (
+                node.select_one('h3, h2') or
+                a.select_one('h3, h2') or
+                node.select_one('[class*="title" i]') or
+                a
+            )
+            title = title_node.get_text(strip=True) if title_node is not None else ''
+            # Date
+            date_node = node.select_one('time[datetime]') or node.select_one('time') or node.select_one('[class*="date" i]')
+            date_text = ''
+            if date_node is not None:
+                date_text = _parse_date_to_iso(date_node.get('datetime', '') or date_node.get_text(strip=True))
+            if title:
+                items.append((href, title, date_text))
+                seen.add(href)
+            if len(items) >= max_items:
+                break
+        # Fallback: greedily scan result anchors if we still have none
+        if not items:
+            for a in root.select('a[href*="/insights/" i]'):
+                if a.find_parent('nav') is not None:
+                    continue
+                href = url_join(base, a.get('href', ''))
+                if not href or href in seen:
+                    continue
+                title = a.get_text(strip=True)
+                if not title:
+                    continue
+                items.append((href, title, ''))
+                seen.add(href)
+                if len(items) >= max_items:
+                    break
+        return items
+
+    # Open base page first, then try accept cookies before any strict waits
+    page_opened = True
+    try:
+        chrome_page_render.goto_url(url=base_url)
+    except Exception:
+        # Do not abort; we will try HTTP fallback later
+        page_opened = False
+
+    _try_accept_cookies()
+    # Soft wait for results container, but do not bail out on timeout
+    try:
+        chrome_page_render.wait_for_selectors(
+            wait_type='appear',
+            selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'section.module-resultslisting')]),
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=False
+        )
+    except Exception:
+        pass
+
+    # Progressive scroll to load more results
+    results = []
+    last_len = 0
+    stagnation_rounds = 0
+
+    def _exec_js(script: str):
+        # Access underlying webdriver; safe no-op if not available
+        try:
+            browser = getattr(chrome_page_render, f"_ChromePageRender__browser", None)
+            if browser is not None:
+                return browser.execute_script(script)
+        except Exception:
+            pass
+        return None
+
+    # Initial wait loop to ensure React list paints (only when page opened)
+    max_wait = max(6, int(url_info.get('WaitingTimeLimitInSeconds', 10)) * 2)
+    if page_opened:
+        for _ in range(max_wait):
+            try:
+                html = chrome_page_render.get_page_source()
+            except Exception:
+                html = ''
+            results = _extract_items(html, base_url)
+            if results:
+                break
+            sleep(0.5)
+
+        while len(results) < max_items:
+            # Scroll near the bottom
+            try:
+                before_h = _exec_js('return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);') or 0
+                _exec_js('window.scrollTo(0, document.body.scrollHeight);')
+                sleep(0.9)
+                after_h = _exec_js('return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);') or before_h
+            except Exception:
+                after_h = 0
+
+            # Try accept cookies again in case banner re-appears or first click failed
+            _try_accept_cookies()
+
+            # Re-parse items
+            try:
+                html = chrome_page_render.get_page_source()
+            except Exception:
+                html = ''
+            current = _extract_items(html, base_url)
+            # Merge with de-dup
+            if current:
+                seen = set(x[0] for x in results)
+                for it in current:
+                    if it[0] not in seen:
+                        results.append(it)
+                        seen.add(it[0])
+
+            # Convergence check
+            if len(results) == last_len and (after_h <= (before_h or 0)):
+                stagnation_rounds += 1
+            else:
+                stagnation_rounds = 0
+            last_len = len(results)
+            if stagnation_rounds >= 3:
+                break
+
+    # If still empty, try static HTTP fallback (SSR may render a list)
+    if not results:
+        try:
+            headers = {
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+            }
+            resp = requests.get(base_url, headers=headers, timeout=20)
+            if not resp.encoding or resp.encoding.lower() in ['iso-8859-1', 'ascii']:
+                resp.encoding = resp.apparent_encoding or 'utf-8'
+            if resp.status_code == 200:
+                results = _extract_items(resp.text or '', base_url)
+        except Exception:
+            pass
+
+    # Render collected items
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
     return None
 
 def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
@@ -1342,6 +1617,25 @@ JPM_URLData = {
 }
 
 URLData.update(JPM_URLData)
+
+KPMG_URLData = {
+    '毕马威中国(KPMG)（洞察）': {
+        'URLs': [
+            'https://kpmg.com/cn/zh/home/insights.html',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'section.module-resultslisting'),
+            ('css', '#resultsListingContainer'),
+            ('css', 'div.resultslistContainer'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler14_KPMG_zh.png',
+        'MaxItems': 40,
+        'HTMLContentHandler': handler14_kpmg_insights,
+    },
+}
+
+URLData.update(KPMG_URLData)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
