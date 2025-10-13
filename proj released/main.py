@@ -382,27 +382,37 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
 
     def _extract_items(html: str, base_url: str):
         soup = BeautifulSoup(html, 'html.parser')
-        root = soup.select_one('main') or soup
+        # Scope strictly within All Insights grid
+        root = soup.select_one('#all-insights') or soup
+        grid = root.select_one('.cmp-dynamic-grid-content') or root
         items = []
         seen = set()
-        # Prefer card-like containers to avoid header/footer nav links
-        card_candidates = root.select('article, li, div')
-        for node in card_candidates:
-            classes = ' '.join(node.get('class') or []).lower()
-            if not (('card' in classes) or ('teaser' in classes) or ('insight' in classes) or node.name in ['article', 'li']):
-                continue
-            a = node.select_one('a[href*="/insights/"]') or node.select_one('a[href]')
+        # Cards: article-card / jpma-article-card / podcast-card
+        cards = grid.select('ul.grid > li.article-card, ul.grid > li.jpma-article-card, ul.grid > li.podcast-card')
+        if not cards:
+            cards = grid.select('ul li.article-card, ul li.jpma-article-card, ul li.podcast-card')
+        # Fallback: any li under grid
+        if not cards:
+            cards = grid.select('ul.grid > li, ul li')
+        for node in cards:
+            # Anchor inside CTA
+            a = (
+                node.select_one('p.dynamic-grid__cta-link a[href]') or
+                node.select_one('a[href*="/insights/"]') or
+                node.select_one('a[href]')
+            )
             if not a or not a.get('href'):
                 continue
             href = url_join(base_url, a['href'])
             if href in seen:
                 continue
-            # avoid nav/footer
             if a.find_parent('nav') is not None:
                 continue
-            title_node = node.select_one('h3, h2') or a
+            # Title/Date within dynamic-grid__title-date
+            td = node.select_one('.dynamic-grid__title-date')
+            title_node = (td.select_one('.dynamic-grid__title') if td else None) or node.select_one('.dynamic-grid__title') or node.select_one('h3, h2') or a
             title = title_node.get_text(strip=True) if title_node is not None else ''
-            date_node = node.select_one('time[datetime]') or node.select_one('time') or node.select_one('.date, .c-date, .o-date, .eyebrow-date')
+            date_node = (td.select_one('.dynamic-grid__date') if td else None) or node.select_one('time[datetime]') or node.select_one('time')
             date_text = ''
             if date_node is not None:
                 date_text = _jpm_parse_en_date_to_iso(date_node.get_text(strip=True) or date_node.get('datetime', ''))
@@ -449,13 +459,11 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
     def _try_click_load_more() -> bool:
         # Attempt several likely selectors for load-more button
         selectors = [
-            'button.load-more',
-            'button[class*="load" i]',
-            'button[aria-label*="Load" i]',
-            'button[aria-label*="More" i]',
-            'button[data-testid*="load" i]',
-            'div.load-more button',
-            'a[role="button"][class*="load" i]',
+            '#all-insights .load-more-container .load-more-card.active button[aria-label="load more content"]',
+            '#all-insights .load-more-container .load-more-card.active button',
+            '#all-insights .load-more-container button',
+            '#all-insights button[aria-label*="load more" i]',
+            '#all-insights button[class*="load" i]',
         ]
         for sel in selectors:
             try:
@@ -477,10 +485,14 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
     base_url = urls[0]
     # Open and wait for initial content
     try:
+        # Wait for All Insights grid to be present
         is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
             url=base_url,
-            selector_types_rules=url_info['RulesAwaitingSelectors(Types,Rules)'],
-            waiting_timeout_in_seconds=url_info['WaitingTimeLimitInSeconds'],
+            selector_types_rules=[
+                ('css', '#all-insights'),
+                ('css', '#all-insights .cmp-dynamic-grid-content ul.grid')
+            ],
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
             print_error_log_to_console=True
         )
     except Exception:
@@ -490,8 +502,18 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
 
     _try_accept_cookies()
 
-    html = chrome_page_render.get_page_source()
-    results = _extract_items(html, base_url)
+    # Poll for the insights grid to load client-side
+    results = []
+    max_wait = int(url_info.get('WaitingTimeLimitInSeconds', 10))
+    for _ in range(max(6, max_wait * 2)):  # 0.5s x loops
+        try:
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            html = ''
+        results = _extract_items(html, base_url)
+        if results:
+            break
+        sleep(0.5)
 
     # Keep clicking load-more while we need more items
     while len(results) < max_items:
@@ -499,12 +521,16 @@ def handler12_jpm_insights(chrome_page_render: ChromePageRender, document: HTMLD
         clicked = _try_click_load_more()
         if not clicked:
             break
-        sleep(1.2)
-        try:
-            html = chrome_page_render.get_page_source()
-        except Exception:
-            break
-        results = _extract_items(html, base_url)
+        # Wait for more items to appear
+        for _ in range(20):
+            sleep(0.5)
+            try:
+                html = chrome_page_render.get_page_source()
+            except Exception:
+                html = ''
+            results = _extract_items(html, base_url)
+            if len(results) > before:
+                break
         if len(results) <= before:
             break
 
@@ -1305,12 +1331,12 @@ JPM_URLData = {
             'https://www.jpmorgan.com/insights#all-insights',
         ],
         'RulesAwaitingSelectors(Types,Rules)': [
-            ('css', 'main'),
-            ('css', 'a[href*="/insights/"]'),
+            ('css', '#all-insights'),
+            ('css', '#all-insights .cmp-dynamic-grid-content ul.grid'),
         ],
         'WaitingTimeLimitInSeconds': 30,
         'LogoPath': './Logos/handler12_JPMorgan.svg',
-        'MaxItems': 80,
+        'MaxItems': 30,
         'HTMLContentHandler': handler12_jpm_insights
     },
 }

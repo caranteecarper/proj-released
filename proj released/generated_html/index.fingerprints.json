@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-12T17:02:09",
+  "generated_at": "2025-10-13T10:15:07",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -9,14 +9,14 @@
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index.htm",
-      "etag": "W/\"68ea9f1d-6f80\"",
-      "last_modified": "Sat, 11 Oct 2025 18:17:01 GMT",
+      "etag": "W/\"68ebf093-6f80\"",
+      "last_modified": "Sun, 12 Oct 2025 18:16:51 GMT",
       "content_hash": "6d7d370214935091a7fff6f24cb08ec7586ec368f1b2879181933b4625492eb6"
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index1.htm",
-      "etag": "W/\"68ea9f1d-7005\"",
-      "last_modified": "Sat, 11 Oct 2025 18:17:01 GMT",
+      "etag": "W/\"68ebf093-7005\"",
+      "last_modified": "Sun, 12 Oct 2025 18:16:51 GMT",
       "content_hash": "6d7d370214935091a7fff6f24cb08ec7586ec368f1b2879181933b4625492eb6"
     },
     {
@@ -165,6 +165,12 @@
     },
     {
       "url": "https://www.ciecc.com.cn/col/col3963/index.html?uid=5248&pageNum=2",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.jpmorgan.com/insights",
       "etag": "",
       "last_modified": "",
       "content_hash": ""
@@ -454,6 +460,7 @@
     "https://www.ciecc.com.cn/col/col2218/index.html?uid=5248&pageNum=2 (undetermined)",
     "https://www.ciecc.com.cn/col/col3963/index.html (undetermined)",
     "https://www.ciecc.com.cn/col/col3963/index.html?uid=5248&pageNum=2 (undetermined)",
+    "https://www.jpmorgan.com/insights (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=0#topicLandingPageList-1969427548-form (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=12#topicLandingPageList-1969427548-form (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=24#topicLandingPageList-1969427548-form (undetermined)",
@@ -500,5 +507,5 @@
     "https://www.sass.org.cn/5867/list.htm (undetermined)",
     "https://www.sass.org.cn/5867/list2.htm (undetermined)"
   ],
-  "total_urls": 73
+  "total_urls": 74
 }
