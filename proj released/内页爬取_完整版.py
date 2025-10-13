@@ -1125,18 +1125,27 @@ def parse_kpmg_article(soup, url, publish_date):
             if meta_title and meta_title.get('content'):
                 title = clean_text(meta_title['content'])
 
-        # 正文
+        # 正文：优先 main/article 范围内的富文本块，按段落拼接
         content = ''
-        content_selectors = [
-            'main article', 'article .rich-text', 'article .cmp-text', 'article .text', 'article',
-            'div.article-content', 'div.cmp-text', 'div.rich-text', 'div.content', '#content'
-        ]
-        for sel in content_selectors:
-            node = soup.select_one(sel)
-            if node and node.get_text(strip=True):
-                content = clean_text(node.get_text("\n"))
-                if content:
-                    break
+        def _first_nonempty_text(nodes):
+            for n in nodes:
+                t = _text_from_container(n)
+                if t:
+                    return t
+            return ''
+        main_scope = soup.select_one('main') or soup
+        article_scope = main_scope.select_one('article') or main_scope
+        candidates = []
+        for css in [
+            'article .cmp-text', 'article .rich-text', 'article .article-content', 'article .text',
+            'div.article-content', 'div.cmp-text', 'div.rich-text', 'section.cmp-text', 'section.text',
+            '.parbase.section.text', '.text.parbase', 'div[class*="article"] .cmp-text',
+        ]:
+            candidates.extend(article_scope.select(css))
+        if not candidates:
+            # 退而求其次：直接用 article 或 main
+            candidates = [article_scope]
+        content = _first_nonempty_text(candidates)
         if not content:
             content = generic_content_by_candidates(soup)
 
@@ -1251,38 +1260,59 @@ def parse_kpmg_article(soup, url, publish_date):
         except Exception:
             authors = ''
 
-        # 附件：优先文档，其次音/视频
+        # 附件：优先文档，其次音/视频（兼容 data-asset/data-href 及 AEM 资源路径）
         file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
         media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = [], []
-        container = soup.select_one('article') or soup.select_one('.content') or soup
-        for a in container.select('a[href]'):
-            href = a.get('href', '')
-            if not href:
-                continue
-            lower = href.lower()
-            full = url_join(url, href)
+        file_urls, media_urls = set(), set()
+        def _maybe_add(u: str):
+            if not u:
+                return
+            lower = u.lower()
+            full = url_join(url, u)
             if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.append(full)
+                file_urls.add(full)
             elif any(lower.endswith(ext) for ext in media_exts):
-                media_urls.append(full)
+                media_urls.add(full)
+
+        scope = article_scope or soup
+        # a[href]/data-asset/data-href
+        for a in scope.select('a[href], a[data-asset], a[data-href], button[data-asset], button[data-href]'):
+            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href'))
+        # source/src, video/audio/src
         for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in container.select(sel):
-                src = node.get('src', '')
-                if not src:
+            for node in scope.select(sel):
+                _maybe_add(node.get('src'))
+        # 解析 JSON-LD 中的媒体/附件 URL
+        try:
+            import json as _json
+            def _walk_urls(obj):
+                if isinstance(obj, dict):
+                    for k in ['contentUrl', 'url', 'embedUrl', 'downloadUrl']:
+                        v = obj.get(k)
+                        if isinstance(v, str):
+                            _maybe_add(v)
+                    for v in obj.values():
+                        _walk_urls(v)
+                elif isinstance(obj, list):
+                    for it in obj:
+                        _walk_urls(it)
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                if not txt.strip():
                     continue
-                lower = src.lower()
-                full = url_join(url, src)
-                if any(lower.endswith(ext) for ext in file_exts):
-                    file_urls.append(full)
-                elif any(ext in lower for ext in media_exts):
-                    media_urls.append(full)
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    continue
+                _walk_urls(data)
+        except Exception:
+            pass
 
         attachments = ''
         if file_urls:
-            attachments = ' ; '.join(file_urls)
+            attachments = ' ; '.join(sorted(file_urls))
         elif media_urls:
-            attachments = ' ; '.join(media_urls)
+            attachments = ' ; '.join(sorted(media_urls))
 
         if not title or not content:
             print(f"KPMG 文章解析失败：标题或正文为空: {url}")
@@ -1508,7 +1538,7 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         print(f"解析页面 {url} 失败: {e}")
         return None
 
-def main():
+def main(only_domain: str = ''):
     """主函数"""
     print("开始爬取智库文章内容...")
     
@@ -1529,6 +1559,13 @@ def main():
         
         soup = BeautifulSoup(s, 'lxml')
         sj_lst = soup.select('.page-board-item')
+        if only_domain:
+            def _u(node):
+                try:
+                    return node.select('a')[0]['href']
+                except Exception:
+                    return ''
+            sj_lst = [m for m in sj_lst if only_domain.lower() in (_u(m) or '').lower()]
         if len(sj_lst) == 0:
             print("聚合页没有发现条目，启用 CDI 栏目直抓模式...")
             def norm_date(text: str) -> str:
@@ -1615,7 +1652,7 @@ def main():
                 except Exception as e:
                     print(f"处理 {u} 出错: {e}")
         
-        print(f"找到 {len(sj_lst)} 篇文章需要爬取")
+        print(f"找到 {len(sj_lst)} 篇文章需要爬取" + (f"（仅域名 {only_domain}）" if only_domain else ""))
         
         # 遍历每篇文章
         total_cnt = len(sj_lst)
@@ -1736,5 +1773,8 @@ if __name__ == "__main__":
         print(f"检测到待修复的 JPM 条目: {len(urls)} (content 词数 < 200)")
         before, after = _remove_items_by_urls_file('output_complete.json', urls)
         print(f"已移除 {before-after} 条，剩余 {after} 条。请再次运行本脚本以重抓这些链接。")
+    elif len(sys.argv) > 2 and sys.argv[1] == '--only-domain':
+        dom = sys.argv[2]
+        main(only_domain=dom)
     else:
         main()
