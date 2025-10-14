@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-14T19:15:12",
+  "generated_at": "2025-10-14T22:34:37",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -123,6 +123,12 @@
     },
     {
       "url": "https://www.amr.org.cn/ghdt/kydt/index_1.html",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.bcg.com/publications",
       "etag": "",
       "last_modified": "",
       "content_hash": ""
@@ -471,6 +477,7 @@
     "https://nsd.pku.edu.cn/sylm/gd/index2.htm (undetermined)",
     "https://www.amr.org.cn/ghdt/kydt/index.html (undetermined)",
     "https://www.amr.org.cn/ghdt/kydt/index_1.html (undetermined)",
+    "https://www.bcg.com/publications (undetermined)",
     "https://www.cas.cn/yw/index.shtml (undetermined)",
     "https://www.cas.cn/yw/index_1.shtml (undetermined)",
     "https://www.ccidgroup.com/xwdt/sdxw.htm (undetermined)",
@@ -481,7 +488,7 @@
     "https://www.ciecc.com.cn/col/col3963/index.html?uid=5248&pageNum=2 (undetermined)",
     "https://www.jpmorgan.com/insights#all-insights (undetermined)",
     "https://www.mckinsey.com.cn/insights/ (undetermined)",
-    "https://www.pwccn.com/zh/research-and-insights.html (first-check)",
+    "https://www.pwccn.com/zh/research-and-insights.html (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=0#topicLandingPageList-1969427548-form (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=12#topicLandingPageList-1969427548-form (undetermined)",
     "https://www.rand.org/topics/children-families-and-communities.html?start=24#topicLandingPageList-1969427548-form (undetermined)",
@@ -528,5 +535,5 @@
     "https://www.sass.org.cn/5867/list.htm (undetermined)",
     "https://www.sass.org.cn/5867/list2.htm (undetermined)"
   ],
-  "total_urls": 77
+  "total_urls": 78
 }

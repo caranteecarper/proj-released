@@ -42,3 +42,12 @@
   - main.py：新增 `handler14_kpmg_insights`，进入 `https://kpmg.com/cn/zh/home/insights.html`，先处理 Cookie 同意，再通过滚动加载收集前 40 条，渲染到主页；加入 `KPMG_URLData` 站点配置（Logo `./Logos/handler14_KPMG_zh.png`）。
   - 内页爬取_完整版.py：新增 `parse_kpmg_article` 并接入路由（kpmg.com），解析标题、日期（JSON-LD/Meta/Time 兜底）、正文与附件（优先文档，若无文档则音/视频），authors 能检测到则填姓名，`thinkank_name` 统一为“毕马威中国(KPMG)”。
   - 行为保持与既有流程一致，输出结构不变。
+
+## 2025-10-14 (追加2)
+- 新增：波士顿咨询(BCG)（洞察/Publications）
+  - main.py：新增 `handler17_bcg_publications`，支持点击“View more”加载，抓取前 28 条；
+    解析 `div.items.js-result-container` 下卡片 `div.Promo-title a.Link[href]` 的链接与标题，日期若有统一为 YYYY-MM-DD；
+    加入 `BCG_URLData` 配置（Logo `./Logos/handler17_BCG.png`，`MaxItems=28`）。
+  - 内页爬取_完整版.py：新增 `parse_bcg_article` 并接入域名分发（bcg.com），解析标题、正文、日期与作者；
+    附件策略与既有一致：优先文档，其次音/视频；并存时仅保留文档；`thinkank_name` 统一为“波士顿咨询（BCG）”。
+  - 未新增其他文件，输出结构与现有完全一致。

@@ -1324,6 +1324,208 @@ def handler16_pwc_zh_insights(chrome_page_render: ChromePageRender, document: HT
                         HTMLTags.span(span_text or '')
     return None
 
+def handler17_bcg_publications(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    波士顿咨询（BCG）（洞察/Publications）列表页处理器
+
+    行为：
+    - 打开 publications 列表页，等待主容器出现；
+    - 若存在 Cookie/同意弹窗，尝试接受；
+    - 点击“View more”按钮以加载更多，直到收集到 MaxItems 条或再无增长；
+    - 抽取卡片的链接、标题、日期（若有），以统一结构渲染。
+
+    选择器策略：
+    - 列表容器：div.items.js-result-container
+    - 卡片标题/链接：div.Promo-title a.Link[href]
+    - 日期：卡片内 time[datetime] 或 class 包含 date 的节点文本
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+
+    base_url = urls[0]
+    max_items = int(url_info.get('MaxItems', 28))
+
+    def _try_accept_cookies():
+        candidates = [
+            ('css', 'button#onetrust-accept-btn-handler'),
+            ('css', 'button[aria-label*="accept" i]'),
+            ('xpath', "//button[contains(., 'Accept') or contains(., '同意') or contains(., '接受')]"),
+        ]
+        for (typ, sel) in candidates:
+            try:
+                is_timeout = chrome_page_render.click_on_html_element(
+                    click_element_selector_type=typ,
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if is_timeout is False:
+                    break
+            except Exception:
+                continue
+
+    def _parse_date_to_iso(s: str) -> str:
+        try:
+            if not isinstance(s, str):
+                return ''
+            s = s.strip()
+            if not s:
+                return ''
+            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        except Exception:
+            pass
+        return ''
+
+    def _extract_items(html: str, base: str):
+        soup = BeautifulSoup(html, 'html.parser')
+        root = soup.select_one('div.items.js-result-container') or soup.select_one('main') or soup
+        items = []
+        seen = set()
+        cards = []
+        if root:
+            cards = root.select('div.Promo-title, div.promo-title, div[class*="Promo-title" i]')
+        for node in cards:
+            a = node.select_one('a.Link[href]') or node.select_one('a[href]')
+            if not a or not a.get('href'):
+                continue
+            href = url_join(base, a['href'])
+            if href in seen:
+                continue
+            title = a.get_text(strip=True) or (node.get_text(strip=True) if node else '')
+            if not title:
+                continue
+            # 查找日期
+            container = node
+            date_node = container.select_one('time[datetime]') if container else None
+            if not date_node:
+                # 往上找一层卡片容器
+                cap = node.find_parent('div') or node
+                date_node = cap.select_one('time[datetime]') if cap else None
+            date_text = ''
+            if date_node is not None:
+                date_text = _parse_date_to_iso(date_node.get('datetime', '') or date_node.get_text(strip=True))
+            items.append((href, title, date_text))
+            seen.add(href)
+            if len(items) >= max_items:
+                break
+        return items
+
+    def _exec_js(script: str):
+        try:
+            browser = getattr(chrome_page_render, f"_ChromePageRender__browser", None)
+            if browser is not None:
+                return browser.execute_script(script)
+        except Exception:
+            pass
+        return None
+
+    def _try_click_view_more() -> bool:
+        candidates = [
+            ('css', 'button.js-result-show-more'),
+            ('css', 'button[data-module-type*="load" i]'),
+            ('css', 'button[class*="show" i][class*="more" i]'),
+            ('css', 'button[class*="view" i][class*="more" i]'),
+            ('xpath', "//button[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'view more') or contains(., 'Load more') or contains(., '更多')]")
+        ]
+        for (typ, sel) in candidates:
+            try:
+                # 滚动到底部以确保按钮可见
+                _exec_js('window.scrollTo(0, document.body.scrollHeight);')
+                t = chrome_page_render.click_on_html_element(
+                    click_element_selector_type=typ,
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(6, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if t is False:
+                    return True
+            except Exception:
+                continue
+        # JS 直接点击首个包含文案的按钮（兜底）
+        try:
+            _exec_js("var btn=[...document.querySelectorAll('button')].find(b=>/view\s*more|load\s*more|更多/i.test((b.innerText||'').trim())); if(btn){btn.click();}")
+            return True
+        except Exception:
+            pass
+        return False
+
+    # 打开列表页
+    try:
+        chrome_page_render.goto_url(url=base_url)
+    except Exception:
+        pass
+    _try_accept_cookies()
+    try:
+        chrome_page_render.wait_for_selectors(
+            wait_type='appear',
+            selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'div.items.js-result-container')]),
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=False
+        )
+    except Exception:
+        pass
+
+    # 初始解析
+    results = []
+    max_wait = max(6, int(url_info.get('WaitingTimeLimitInSeconds', 10)) * 2)
+    for _ in range(max_wait):
+        try:
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            html = ''
+        results = _extract_items(html, base_url)
+        if results:
+            break
+        sleep(0.5)
+
+    # 点击 View more 直到足量
+    stagnation_rounds = 0
+    last_len = len(results)
+    while len(results) < max_items and stagnation_rounds < 4:
+        clicked = _try_click_view_more()
+        if not clicked:
+            break
+        # 等待新卡片出现
+        for _ in range(24):
+            sleep(0.5)
+            try:
+                html = chrome_page_render.get_page_source()
+            except Exception:
+                html = ''
+            cur = _extract_items(html, base_url)
+            if len(cur) > len(results):
+                results = cur
+                break
+        if len(results) == last_len:
+            stagnation_rounds += 1
+        else:
+            stagnation_rounds = 0
+        last_len = len(results)
+        # 轻微滚动一次，触发惰性渲染
+        _exec_js('window.scrollTo(0, document.body.scrollHeight);')
+
+    # 渲染到聚合页
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
 def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     # this function adds <site_name> and <site_urls_contents> into <document> in an elegant way
     if len(url_info['URLs']) <= 0:
@@ -2013,6 +2215,25 @@ PWC_ZH_URLData = {
 }
 
 URLData.update(PWC_ZH_URLData)
+
+# 波士顿咨询（BCG）（洞察/Publications）
+BCG_URLData = {
+    '波士顿咨询(BCG)（洞察）': {
+        'URLs': [
+            'https://www.bcg.com/publications',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.items.js-result-container'),
+            ('css', 'div.Promo-title a.Link')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler17_BCG.png',
+        'MaxItems': 28,
+        'HTMLContentHandler': handler17_bcg_publications,
+    },
+}
+
+URLData.update(BCG_URLData)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
