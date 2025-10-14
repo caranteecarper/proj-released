@@ -1073,6 +1073,10 @@ def handler15_mck_insights(chrome_page_render: ChromePageRender, document: HTMLD
                 if not a or not a.get('href'):
                     continue
                 href = url_join(base, a['href'])
+                # 过滤分页/聚合链接，避免误入列表页造成详情抓取超时
+                href_l = href.lower().rstrip('/')
+                if href_l.endswith('/insights') or '/insights/page/' in href_l:
+                    continue
                 if href in seen:
                     continue
                 title_node = (

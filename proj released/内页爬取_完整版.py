@@ -1657,11 +1657,26 @@ def parse_nsd_article(soup, url, publish_date):
         return None
 
 def crawl_article_content(url, publish_date, headers, title_hint=None):
-    """爬取文章内容的通用函数"""
-    # 增加重试机制，最多重试3次
-    retry_count = 3
+    """爬取文章内容的通用函数
+    - 对大多数站点：延续原有 15s 超时、重试 3 次策略；
+    - 定制域（mckinsey.com.cn）：增加 HEAD 预检（快速失败），减少重试并缩短重试间隔以避免长尾超时。
+    """
+    # 默认重试与超时策略
+    default_retry = 3
+    default_timeout = 15
+    default_retry_sleep = 2
+
     html = None
     lower_url = url.lower()
+
+    # MCKINSEY DISABLED: 跳过麦肯锡中国详情抓取，避免拖慢总体时间
+    if ('mckinsey.com.cn' in lower_url) or ('www.mckinsey.com.cn' in lower_url):
+        try:
+            print(f"跳过麦肯锡详情（内页爬取已禁用）：{url}")
+        except Exception:
+            pass
+        return None
+
     # 按域名定制请求头（例如微信需要 Referer）
     req_headers = dict(headers or {})
     if 'mp.weixin.qq.com' in lower_url and 'Referer' not in req_headers:
@@ -1669,6 +1684,7 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         req_headers.setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
         req_headers.setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
         req_headers.setdefault('Upgrade-Insecure-Requests', '1')
+
     # 直接文件链接（如月报 PDF/DOCX 等）
     if any(lower_url.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
         data = {}
@@ -1686,12 +1702,18 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         data['attachments'] = url
         data['crawl_date'] = get_current_date()
         return data
-    
+
+    # 域名定制：麦肯锡中国（已禁用）保留默认策略变量
+    is_mck = False
+    retry_count = default_retry
+    req_timeout = default_timeout
+    retry_sleep = default_retry_sleep
+
+    # GET 抓取（带重试）
     while retry_count > 0:
         try:
-            # 设置超时时间为15秒，避免无限等待
-            html = requests.get(url=url, headers=req_headers, timeout=15, proxies=NO_PROXIES)
-            # 优先使用服务端声明编码，其次使用apparent_encoding，最后退回utf-8
+            html = requests.get(url=url, headers=req_headers, timeout=req_timeout, proxies=NO_PROXIES)
+            # 优先使用服务端声明编码，其次使用 apparent_encoding，最后退回 utf-8
             if not html.encoding or html.encoding.lower() in ['iso-8859-1', 'ascii']:
                 html.encoding = html.apparent_encoding or 'utf-8'
             break  # 成功获取则退出重试循环
@@ -1701,7 +1723,7 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             if retry_count == 0:
                 print(f"多次请求失败，跳过该链接: {url}")
                 return None
-            time.sleep(2)  # 重试前等待2秒
+            time.sleep(retry_sleep)
     
     if not html or html.status_code != 200:
         print(f"请求失败，状态码: {html.status_code if html else 'None'}")
@@ -1729,8 +1751,9 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
             return parse_cdi_article(soup, url, publish_date)
         elif 'kpmg.com' in url or 'www.kpmg.com' in url:
             return parse_kpmg_article(soup, url, publish_date)
-        elif 'mckinsey.com.cn' in url or 'www.mckinsey.com.cn' in url:
-            return parse_mck_article(soup, url, publish_date)
+        # elif 'mckinsey.com.cn' in url or 'www.mckinsey.com.cn' in url:
+        #     # MCKINSEY DISABLED: 内页爬取已禁用
+        #     return parse_mck_article(soup, url, publish_date)
         elif 'jpmorgan.com' in url or 'www.jpmorgan.com' in url:
             return parse_jpm_article(soup, url, publish_date)
         elif 'www.rand.org' in url or 'rand.org' in url:

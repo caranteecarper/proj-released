@@ -6,6 +6,14 @@
   - 内页爬取_完整版.py：新增 `parse_mck_article` 并在域名分发中接入（mckinsey.com.cn）。解析标题、正文、日期（JSON-LD/Meta/Time 兜底），作者（可检出时使用文章作者姓名），附件遵循“优先文档（pdf/doc/xls/ppt），无文档则音/视频”的规则；`thinkank_name` 统一为“麦肯锡中国（McKinsey & Company）”。
   - 未新增其他文件，沿用原有流程与输出结构。
 
+## 2025-10-14
+- 优化：麦肯锡列表与详情抓取耗时
+  - main.py：在 `handler15_mck_insights` 中过滤 `/insights/page/…` 与 `/insights` 聚合页链接，避免将分页页当作详情造成长时间超时。
+  - 内页爬取_完整版.py：对 `mckinsey.com.cn` 启用域名定制抓取策略：
+    - 增加 HEAD 预检（≤8s）用于快速失败；
+    - 将详情 GET 的重试次数从 3 调整为 2，每次超时 12s，重试间隔 1s；
+    - 其他域名保持原有策略不变。
+
 ## 2025-10-12
 
 - 移除 Brookings Institution（美国布鲁金斯学会）相关集成与解析，保持其余站点流程不变�?- 新增 RAND Corporation 列表抓取与渲染：
