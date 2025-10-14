@@ -26,6 +26,17 @@
   - 未更改现有统一等待/超时与渲染逻辑；不新增额外文件。
 # CHANGELOG
 
+## 2025-10-14 (追加)
+- 新增：普华永道（PwC）（洞察）集成（中文站 https://www.pwccn.com/zh/research-and-insights.html）
+  - main.py：新增 `handler16_pwc_zh_insights`（无需点击“加载更多”，抓取前 12 条）；
+    解析 `article` 卡片，抽取链接、标题、日期（统一 YYYY-MM-DD），输出到主页板块；
+    新增 `PWC_ZH_URLData` 配置（Logo `./Logos/handler15_pwc_zh.png`，`MaxItems=12`）。
+  - 内页爬取_完整版.py：新增 `parse_pwc_article` 并在域名分发中接入（pwccn.com）。
+    标题/正文按富文本容器优先，日期优先 JSON-LD；作者若可检测则写入作者姓名；
+    附件遵循“优先文档（pdf/doc/xls/ppt），无文档则回退音视频；若二者并存仅保留文档”的规则；
+    `thinkank_name` 统一填写为“普华永道（PwC）”。
+  - 未新增其他文件，保持现有流程与输出结构不变。
+
 ## 2025-10-13
 - 新增：KPMG 中国（毕马威中国）洞察列表抓取与渲染
   - main.py：新增 `handler14_kpmg_insights`，进入 `https://kpmg.com/cn/zh/home/insights.html`，先处理 Cookie 同意，再通过滚动加载收集前 40 条，渲染到主页；加入 `KPMG_URLData` 站点配置（Logo `./Logos/handler14_KPMG_zh.png`）。

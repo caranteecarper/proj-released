@@ -1184,6 +1184,146 @@ def handler15_mck_insights(chrome_page_render: ChromePageRender, document: HTMLD
                         HTMLTags.h3(h3_text)
                         HTMLTags.span(span_text or '')
     return None
+
+def handler16_pwc_zh_insights(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    普华永道（PwC）中国（洞察）列表页处理器
+
+    需求与行为：
+    - 仅抓取前 12 条（无需点击“加载更多”）。
+    - 页面初始即呈现若干 <article> 卡片；提取每条的链接、标题、日期（若有）。
+    - 输出格式与既有站点一致。
+
+    解析策略（尽量健壮）：
+    - 作用域：优先 main，然后容器内查找 article/卡片。
+    - 卡片链接：优先匹配 a[href*="/zh/research-and-insights" i]；兜底 a[href]。
+    - 标题：h3/h2 或 class 含 title 的节点；兜底 a 文本。
+    - 日期：time[datetime] 或包含 "date" 类名的节点文本，统一 YYYY-MM-DD。
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+
+    base_url = urls[0]
+    max_items = int(url_info.get('MaxItems', 12))
+
+    def _try_accept_cookies():
+        candidates = [
+            ('css', 'button#onetrust-accept-btn-handler'),
+            ('css', 'button[aria-label*="accept" i]'),
+            ('css', 'button[title*="接受" i], button[title*="同意" i]'),
+            ('xpath', "//button[contains(., '接受') or contains(., '同意') or contains(., '允许')]")
+        ]
+        for (typ, sel) in candidates:
+            try:
+                is_timeout = chrome_page_render.click_on_html_element(
+                    click_element_selector_type=typ,
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if is_timeout is False:
+                    break
+            except Exception:
+                continue
+
+    def _parse_date_to_iso(s: str) -> str:
+        try:
+            if not isinstance(s, str):
+                return ''
+            s = s.strip()
+            if not s:
+                return ''
+            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        except Exception:
+            pass
+        return ''
+
+    def _extract_items(html: str, base: str):
+        soup = BeautifulSoup(html, 'html.parser')
+        root = soup.select_one('main') or soup.select_one('div.cmp-container') or soup
+        items = []
+        seen = set()
+        containers = [
+            root.select_one('div[class*="collectionv2" i]'),
+            root.select_one('section[class*="collection" i]'),
+            root
+        ]
+        for container in containers:
+            if not container:
+                continue
+            cards = container.select('article, li, div')
+            for node in cards:
+                a = node.select_one('a[href*="/zh/research-and-insights" i]') or node.select_one('a[href]')
+                if not a or not a.get('href'):
+                    continue
+                href = url_join(base, a['href'])
+                if href in seen:
+                    continue
+                title_node = (
+                    node.select_one('h3, h2') or a.select_one('h3, h2') or node.select_one('[class*="title" i]') or a
+                )
+                title = title_node.get_text(strip=True) if title_node is not None else ''
+                if not title:
+                    continue
+                date_node = node.select_one('time[datetime]') or node.select_one('time') or node.select_one('[class*="date" i]')
+                date_text = ''
+                if date_node is not None:
+                    date_text = _parse_date_to_iso(date_node.get('datetime', '') or date_node.get_text(strip=True))
+                items.append((href, title, date_text))
+                seen.add(href)
+                if len(items) >= max_items:
+                    break
+            if len(items) >= max_items:
+                break
+        return items
+
+    try:
+        chrome_page_render.goto_url(url=base_url)
+    except Exception:
+        pass
+    _try_accept_cookies()
+    try:
+        chrome_page_render.wait_for_selectors(
+            wait_type='appear',
+            selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'main')]),
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=False
+        )
+    except Exception:
+        pass
+
+    results = []
+    max_wait = max(6, int(url_info.get('WaitingTimeLimitInSeconds', 10)) * 2)
+    for _ in range(max_wait):
+        try:
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            html = ''
+        results = _extract_items(html, base_url)
+        if results:
+            break
+        sleep(0.5)
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
+
 def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     # this function adds <site_name> and <site_urls_contents> into <document> in an elegant way
     if len(url_info['URLs']) <= 0:
@@ -1854,6 +1994,25 @@ MCK_URLData = {
 }
 
 URLData.update(MCK_URLData)
+
+# 普华永道中国（洞察）
+PWC_ZH_URLData = {
+    '普华永道（PwC）（洞察）': {
+        'URLs': [
+            'https://www.pwccn.com/zh/research-and-insights.html',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main'),
+            ('css', 'article a[href*="/zh/research-and-insights" i]'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler15_pwc_zh.png',
+        'MaxItems': 12,
+        'HTMLContentHandler': handler16_pwc_zh_insights,
+    },
+}
+
+URLData.update(PWC_ZH_URLData)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
