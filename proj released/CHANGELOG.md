@@ -30,7 +30,7 @@
 - 新增：普华永道（PwC）（洞察）集成（中文站 https://www.pwccn.com/zh/research-and-insights.html）
   - main.py：新增 `handler16_pwc_zh_insights`（无需点击“加载更多”，抓取前 12 条）；
     解析 `article` 卡片，抽取链接、标题、日期（统一 YYYY-MM-DD），输出到主页板块；
-    新增 `PWC_ZH_URLData` 配置（Logo `./Logos/handler15_pwc_zh.png`，`MaxItems=12`）。
+    新增 `PWC_ZH_URLData` 配置（Logo `./Logos/handler16_pwc.png`，`MaxItems=12`）。
   - 内页爬取_完整版.py：新增 `parse_pwc_article` 并在域名分发中接入（pwccn.com）。
     标题/正文按富文本容器优先，日期优先 JSON-LD；作者若可检测则写入作者姓名；
     附件遵循“优先文档（pdf/doc/xls/ppt），无文档则回退音视频；若二者并存仅保留文档”的规则；

@@ -2006,7 +2006,7 @@ PWC_ZH_URLData = {
             ('css', 'article a[href*="/zh/research-and-insights" i]'),
         ],
         'WaitingTimeLimitInSeconds': 30,
-        'LogoPath': './Logos/handler15_pwc_zh.png',
+        'LogoPath': './Logos/handler16_pwc.png',
         'MaxItems': 12,
         'HTMLContentHandler': handler16_pwc_zh_insights,
     },

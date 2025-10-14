@@ -1580,16 +1580,36 @@ def parse_pwc_article(soup, url, publish_date):
 
         main_scope = soup.select_one('main') or soup
         article_scope = main_scope.select_one('article') or main_scope
-        candidates = []
-        for css in [
-            'article .cmp-text', 'article .rich-text', 'article .article-content', 'article .text',
-            'div.article-content', 'div.cmp-text', 'div.rich-text', 'section.cmp-text', 'section.text',
-            '.parbase.section.text', '.text.parbase', 'div[class*="article" i] .cmp-text',
-        ]:
-            candidates.extend(article_scope.select(css))
-        if not candidates:
-            candidates = [article_scope]
-        content = _first_nonempty_text(candidates)
+
+        def _collect_rich_text(root):
+            nodes = []
+            if not root:
+                return ''
+            # 优先富文本与折叠面板中的文本
+            selectors = [
+                'article .cmp-text', 'article .rich-text', 'article .article-content', 'article .text',
+                'div.article-content', 'div.cmp-text', 'div.rich-text', 'section.cmp-text', 'section.text',
+                '.parbase.section.text', '.text.parbase', 'div[class*="article" i] .cmp-text',
+                # 兼容 AEM 折叠面板/手风琴组件
+                '.cmp-accordion__panel .cmp-text', '.cmp-accordion__panel .rich-text',
+                '.cmp-accordion .cmp-accordion__panel',
+            ]
+            for css in selectors:
+                nodes.extend(root.select(css))
+            # 退而求其次：文章根下的段落/列表
+            if not nodes:
+                nodes = [root]
+            # 拼接为多段文本
+            chunks = []
+            for n in nodes:
+                t = n.get_text("\n", strip=True)
+                if t:
+                    chunks.append(t)
+            text = "\n".join(chunks)
+            text = clean_text(text)
+            return text
+
+        content = _collect_rich_text(article_scope)
         if not content:
             content = generic_content_by_candidates(soup)
 
@@ -1729,6 +1749,85 @@ def parse_pwc_article(soup, url, publish_date):
             attachments = ' ; '.join(sorted(file_urls))
         elif media_urls:
             attachments = ' ; '.join(sorted(media_urls))
+
+        # 若正文偏短（有些 PwC 页只显示口号/导语），尝试动态加载兜底
+        def _word_count(s: str) -> int:
+            try:
+                return len([w for w in re.split(r'\s+', (s or '').strip()) if w])
+            except Exception:
+                return 0
+        if _word_count(content) < 120:
+            try:
+                from selenium.webdriver.chrome.options import Options as _ChromeOptions
+                import undetected_chromedriver as _uc
+                from selenium.webdriver.common.by import By as _By
+                from selenium.webdriver.support.ui import WebDriverWait as _Wait
+                from selenium.webdriver.support import expected_conditions as _EC
+                _opts = _ChromeOptions()
+                try:
+                    _opts.page_load_strategy = 'none'
+                except Exception:
+                    pass
+                _opts.add_argument('--disable-blink-features=AutomationControlled')
+                _opts.add_argument('--ignore-certificate-errors')
+                _opts.add_argument('--ignore-ssl-errors')
+                _opts.add_argument('--disable-site-isolation-trials')
+                _opts.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                _driver = _uc.Chrome(options=_opts)
+                try:
+                    _driver.get(url)
+                    try:
+                        # 等待文章主体或富文本块出现
+                        _Wait(_driver, 15).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'main article, article')))
+                        _Wait(_driver, 10).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'article .cmp-text, article .rich-text, .cmp-accordion__panel')))
+                    except Exception:
+                        pass
+                    html2 = _driver.page_source
+                finally:
+                    try:
+                        _driver.quit()
+                    except Exception:
+                        pass
+                if html2:
+                    sp2 = BeautifulSoup(html2, 'lxml')
+                    main2 = sp2.select_one('main') or sp2
+                    art2 = main2.select_one('article') or main2
+                    text2 = _collect_rich_text(art2)
+                    if _word_count(text2) > _word_count(content):
+                        content = text2
+            except Exception:
+                pass
+
+        # 若仍过短，尝试跟随站内外“strategy-business”原文链接抓取正文
+        if _word_count(content) < 120:
+            try:
+                a = soup.select_one('a[href*="strategy-business."]')
+                if a and a.get('href'):
+                    ext_url = url_join(url, a['href'])
+                    try:
+                        r = requests.get(ext_url, headers={'user-agent': 'Mozilla/5.0'}, timeout=15, proxies=NO_PROXIES)
+                        if not r.encoding or r.encoding.lower() in ['iso-8859-1', 'ascii']:
+                            r.encoding = r.apparent_encoding or 'utf-8'
+                        if r.status_code == 200 and (r.text or '').strip():
+                            sp = BeautifulSoup(r.text, 'lxml')
+                            # 取外站正文
+                            body = ''
+                            for sel in [
+                                'article', 'main article', 'div.article-body', 'div.entry-content', 'div.article-content',
+                                'section.article', 'div#content'
+                            ]:
+                                node = sp.select_one(sel)
+                                if node and node.get_text(strip=True):
+                                    body = clean_text(node.get_text('\n'))
+                                    break
+                            if not body:
+                                body = generic_content_by_candidates(sp)
+                            if _word_count(body) > _word_count(content):
+                                content = body
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         if not title or not content:
             print(f"PwC 文章解析失败：标题或正文为空: {url}")
