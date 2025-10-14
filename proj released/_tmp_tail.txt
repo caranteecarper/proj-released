@@ -1,0 +1,1 @@
+  - main.py：新�?`handler14_kpmg_insights`，进�?`https://kpmg.com/cn/zh/home/insights.html`，先处理 Cookie 同意，再通过滚动加载收集�?40 条，渲染到主页；加入 `KPMG_URLData` 站点配置（Logo `./Logos/handler14_KPMG_zh.png`）�?  - 内页爬取_完整�?py：新�?`parse_kpmg_article` 并接入路由（kpmg.com），解析标题、日期（JSON-LD/Meta/Time 兜底）、正文与附件（优先文档，若无文档则音/视频），authors 能检测到则填姓名，`thinkank_name` 统一为“毕马威中国(KPMG)”�?  - 行为保持与既有流程一致，输出结构不变�?

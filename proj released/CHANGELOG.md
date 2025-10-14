@@ -1,5 +1,11 @@
 # 更新日志 (Changelog)
 
+## 2025-10-13 (追加)
+- 新增：麦肯锡中国（McKinsey & Company）（洞察）
+  - main.py：新增 `handler15_mck_insights`（滚动加载，无“加载更多”按钮），采集前 20 条并输出为 `page-board-item`，加入 `MCK_URLData` 配置（Logo `./Logos/handler15_McK_zh.png`）。
+  - 内页爬取_完整版.py：新增 `parse_mck_article` 并在域名分发中接入（mckinsey.com.cn）。解析标题、正文、日期（JSON-LD/Meta/Time 兜底），作者（可检出时使用文章作者姓名），附件遵循“优先文档（pdf/doc/xls/ppt），无文档则音/视频”的规则；`thinkank_name` 统一为“麦肯锡中国（McKinsey & Company）”。
+  - 未新增其他文件，沿用原有流程与输出结构。
+
 ## 2025-10-12
 
 - 移除 Brookings Institution（美国布鲁金斯学会）相关集成与解析，保持其余站点流程不变�?- 新增 RAND Corporation 列表抓取与渲染：
@@ -17,4 +23,3 @@
   - main.py：新增 `handler14_kpmg_insights`，进入 `https://kpmg.com/cn/zh/home/insights.html`，先处理 Cookie 同意，再通过滚动加载收集前 40 条，渲染到主页；加入 `KPMG_URLData` 站点配置（Logo `./Logos/handler14_KPMG_zh.png`）。
   - 内页爬取_完整版.py：新增 `parse_kpmg_article` 并接入路由（kpmg.com），解析标题、日期（JSON-LD/Meta/Time 兜底）、正文与附件（优先文档，若无文档则音/视频），authors 能检测到则填姓名，`thinkank_name` 统一为“毕马威中国(KPMG)”。
   - 行为保持与既有流程一致，输出结构不变。
-
