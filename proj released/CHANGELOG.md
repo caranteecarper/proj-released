@@ -1,5 +1,19 @@
 # 更新日志 (Changelog)
 
+## 2025-10-15 (追加 — EY China)
+- 新增：安永中国（EY）两栏目（各取前 10 条）：
+  - 安永中国(EY)（中国税务快讯）：https://www.ey.com/zh_cn/technical/china-tax-alerts
+  - 安永中国(EY)（中国会计通讯）：https://www.ey.com/zh_cn/technical/assurance/china-accounting-alerts
+- main.py：
+  - 新增 `handler19_ey_hub`（动态渲染 hub 列表，抽取链接/标题/日期，统一渲染为 page-board-item）。
+  - 在 URLData 末尾加入上述两项，`MaxItems=10`，`LogoPath=./Logos/handler19_EY_zh.png`，标题按“安永中国(EY)（…）”。
+- 内页爬取_完整版.py：
+  - 新增 `parse_ey_article` 并接入域名路由（ey.com）。
+  - 字段对齐既有格式：title/url/publish_date/authors/thinkank_name/summary/content/attachments。
+  - authors：可检测到则写入作者姓名；`thinkank_name` 统一为“安永中国（EY）”。
+  - 附件：优先文档（pdf/doc/xls/ppt 等）；若仅有音频/视频则返回其 URL；并存时仅保留文档。
+- 未新增其他文件，沿用既有流程与设置。
+
 ## 2025-10-15 (追加)
 - 新增：贝恩咨询（Bain & Company）（中文观点栏目）
   - main.py：新增 `handler18_bain_news`，抓取四个栏目，每栏最多 10 条：

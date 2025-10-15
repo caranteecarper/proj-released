@@ -1757,6 +1757,214 @@ def handler8_cdi_articles(chrome_page_render: ChromePageRender, document: HTMLDo
     return None
 
 
+def handler19_ey_hub(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    EY China hub/list handler
+
+    - 动态渲染列表页（technical/... hubs），抓取前 N 条
+    - 字段：link/title/date(若有)，渲染成统一的 page-board-item
+    - 选择器尽量宽松以适配站点改版；同时避免导航/页脚
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+
+    max_items = int(url_info.get('MaxItems', 10))
+
+    def _try_accept_cookies():
+        candidates = [
+            ('css', 'button#onetrust-accept-btn-handler'),
+            ('css', 'button[aria-label*="accept" i]'),
+            ('css', 'button[aria-label*="agree" i]'),
+            ('css', 'button[class*="cookie" i][class*="accept" i]'),
+        ]
+        for (typ, sel) in candidates:
+            try:
+                t = chrome_page_render.click_on_html_element(
+                    click_element_selector_type=typ,
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if t is False:
+                    break
+            except Exception:
+                continue
+
+    def _parse_date_to_iso(s: str) -> str:
+        try:
+            if not isinstance(s, str):
+                return ''
+            s = (s or '').strip()
+            if not s:
+                return ''
+            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        except Exception:
+            pass
+        return ''
+
+    def _extract_items(html: str, base: str):
+        soup = BeautifulSoup(html or '', 'html.parser')
+        root = soup.select_one('main') or soup
+        items = []
+        seen = set()
+
+        # 针对不同栏目限定子路径，避免误抓首页导航
+        base_l = (base or '').lower()
+        required_subpaths = []
+        if 'china-tax-alerts' in base_l:
+            required_subpaths = [
+                '/technical/china-tax-alerts/',
+                '/zh_cn/technical/china-tax-alerts/',
+                '/content/ey-unified-site/ey-com/local/cn/zh_cn/technical/china-tax-alerts/'
+            ]
+        elif 'china-accounting-alerts' in base_l:
+            required_subpaths = [
+                '/technical/assurance/china-accounting-alerts/',
+                '/zh_cn/technical/assurance/china-accounting-alerts/',
+                '/content/ey-unified-site/ey-com/local/cn/zh_cn/technical/assurance/china-accounting-alerts/'
+            ]
+
+        def _is_detail_link(href: str) -> bool:
+            try:
+                if not href:
+                    return False
+                hl = href.lower()
+                # 排除锚点/协议链接
+                if hl.startswith('javascript:') or hl.startswith('mailto:') or hl.endswith('#'):
+                    return False
+                # 仅保留本站
+                if ('ey.com' not in hl) and (not hl.startswith('/')) and ('content/ey-unified-site' not in hl):
+                    return False
+                # 必须包含栏目子路径且不是栏目根本身
+                for sub in required_subpaths:
+                    if sub in hl and not hl.rstrip('/').endswith(sub.rstrip('/')):
+                        return True
+                return False
+            except Exception:
+                return False
+
+        card_nodes = []
+        for sel in [
+            'main article',
+            'main ul li',
+            'main section article',
+            'main [class*="card" i]',
+            'main [class*="list" i] li'
+        ]:
+            card_nodes = root.select(sel)
+            if card_nodes:
+                break
+        if not card_nodes:
+            try:
+                card_nodes = [n for n in root.select('div, section, article, li') if n.select_one('a[href]')]
+            except Exception:
+                card_nodes = []
+
+        for node in card_nodes:
+            a = (
+                node.select_one('a[href^="/zh_cn/" i]') or
+                node.select_one('a[href*="/zh_cn/" i]') or
+                node.select_one('a[href^="/" i]') or
+                node.select_one('a[href^="https://www.ey.com" i]') or
+                node.select_one('a[href]')
+            )
+            if not a or not a.get('href'):
+                continue
+            href = url_join(base, a.get('href'))
+            if not _is_detail_link(href):
+                continue
+            if not href or href in seen:
+                continue
+            try:
+                if a.find_parent('nav') is not None:
+                    continue
+            except Exception:
+                pass
+
+            title_node = node.select_one('h3, h2') or a
+            title = title_node.get_text(strip=True) if title_node is not None else ''
+            if not title:
+                continue
+
+            date_node = node.select_one('time[datetime]') or node.select_one('time') or node.select_one('[class*="date" i]')
+            date_text = ''
+            if date_node is not None:
+                date_text = _parse_date_to_iso(date_node.get('datetime', '') or date_node.get_text(strip=True))
+
+            items.append((href, title, date_text))
+            seen.add(href)
+            if len(items) >= max_items:
+                break
+
+        if not items:
+            for a in root.select('a[href]'):
+                try:
+                    if a.find_parent('nav') is not None:
+                        continue
+                except Exception:
+                    pass
+                href = url_join(base, a.get('href', ''))
+                if not _is_detail_link(href):
+                    continue
+                if not href or href in seen:
+                    continue
+                title = a.get_text(strip=True) or a.get('aria-label', '').strip()
+                if not title:
+                    continue
+                items.append((href, title, ''))
+                seen.add(href)
+                if len(items) >= max_items:
+                    break
+        return items
+
+    results = []
+    base_url = urls[0]
+    try:
+        chrome_page_render.goto_url(url=base_url)
+    except Exception:
+        pass
+    _try_accept_cookies()
+    try:
+        chrome_page_render.wait_for_selectors(
+            wait_type='appear',
+            selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'main')]),
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=False
+        )
+    except Exception:
+        pass
+
+    max_wait = max(6, int(url_info.get('WaitingTimeLimitInSeconds', 10)) * 2)
+    for _ in range(max_wait):
+        try:
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            html = ''
+        results = _extract_items(html, base_url)
+        if results:
+            break
+        sleep(0.5)
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
+
 def handler9_cdi_files(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     if len(url_info['URLs']) <= 0:
         return None
@@ -2422,6 +2630,36 @@ BAIN_URLData = {
 
 URLData.update(BAIN_URLData)
 
+
+# EY China（新增两个栏目）
+EY_URLData = {
+    '安永中国(EY)（中国税务快讯）': {
+        'URLs': [
+            'https://www.ey.com/zh_cn/technical/china-tax-alerts',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler19_EY_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler19_ey_hub,
+    },
+    '安永中国(EY)（中国会计通讯）': {
+        'URLs': [
+            'https://www.ey.com/zh_cn/technical/assurance/china-accounting-alerts',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler19_EY_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler19_ey_hub,
+    },
+}
+
+URLData.update(EY_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |
