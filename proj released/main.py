@@ -1526,6 +1526,138 @@ def handler17_bcg_publications(chrome_page_render: ChromePageRender, document: H
                         HTMLTags.h3(h3_text)
                         HTMLTags.span(span_text or '')
     return None
+
+
+def handler18_bain_news(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    贝恩咨询（Bain & Company）中文站栏目列表抓取（最多 N 条）。
+
+    页面结构特征：
+    - 列表页面：每条为 div.card，链接在 card 内的 a[href]（指向 news_info.php?id=...），
+      标题在 .card-body .card-title，日期在 .card-footer（形如 YYYY-MM-DD）。
+    - 翻页：通过 &page=2, 3... 翻页；通常首页已足够，此处按需翻页直至凑满 MaxItems。
+
+    渲染：输出到主页的一个 page-board 板块，内部若干 page-board-item，结构与既有站点一致。
+    """
+    base_urls = url_info.get('URLs', []) or []
+    if not base_urls:
+        return None
+
+    max_items = int(url_info.get('MaxItems', 10))
+
+    def _extract_items(html: str, base_url: str):
+        items = []
+        seen = set()
+        if not html:
+            return items
+        soup = BeautifulSoup(html, 'html.parser')
+        # 以详情页链接作为锚点，向上找卡片容器，抽取标题与日期
+        for a in soup.select('a[href*="news_info.php?id="]'):
+            href = a.get('href') or ''
+            if not href:
+                continue
+            full = url_join(base_url, href)
+            if full in seen:
+                continue
+            card = a
+            # 就近查找 div.card 容器
+            try:
+                card = a.find_parent('div', class_='card') or a
+            except Exception:
+                card = a
+            # 标题
+            tnode = (card.select_one('.card-body .card-title') or
+                     card.select_one('.card-title') or
+                     card.select_one('img[alt]') or a)
+            title = ''
+            try:
+                if tnode:
+                    title = (tnode.get_text(strip=True) or (tnode.get('alt') or '').strip())
+            except Exception:
+                title = ''
+            if not title:
+                continue
+            # 日期
+            date_text = ''
+            try:
+                dnode = card.select_one('.card-footer')
+                if dnode:
+                    date_text = dnode.get_text(strip=True)
+            except Exception:
+                date_text = ''
+            items.append((full, title, date_text))
+            seen.add(full)
+            if len(items) >= max_items:
+                break
+        return items
+
+    # 逐个 base_url 处理（通常每个栏目仅一个 URL）
+    aggregated = []
+    for base in base_urls:
+        # 首页
+        html = None
+        try:
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=base,
+                selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'div.card')]),
+                waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+                print_error_log_to_console=False
+            )
+            # 即使等待超时，也尽力读取页面源代码进行解析（以防选择器不稳定）
+            html = chrome_page_render.get_page_source()
+        except Exception:
+            html = None
+        aggregated.extend(_extract_items(html or '', base))
+        if len(aggregated) >= max_items:
+            break
+
+        # 若不足，尝试翻页（page=2 开始）直至凑满或停滞
+        page_no = 2
+        stagnate = 0
+        while len(aggregated) < max_items and stagnate < 2 and page_no <= 5:
+            if '?' in base:
+                next_url = f"{base}&page={page_no}"
+            else:
+                next_url = f"{base}?page={page_no}"
+            html2 = None
+            before = len(aggregated)
+            try:
+                is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                    url=next_url,
+                    selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [('css', 'div.card')]),
+                    waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+                    print_error_log_to_console=False
+                )
+                # 读取页面源代码（无论 wait 是否超时）
+                html2 = chrome_page_render.get_page_source()
+            except Exception:
+                html2 = None
+            cur = _extract_items(html2 or '', base)
+            # 去重合并
+            if cur:
+                exist = set(x[0] for x in aggregated)
+                for it in cur:
+                    if it[0] not in exist:
+                        aggregated.append(it)
+                        exist.add(it[0])
+            if len(aggregated) == before:
+                stagnate += 1
+            else:
+                stagnate = 0
+            page_no += 1
+
+    # 渲染
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info.get('LogoPath', './Logos/handler18_BAIN_zh.png'), alt='Missing Logo')
+            with HTMLTags.a(href=base_urls[0]):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in aggregated[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
 def handler7(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     # this function adds <site_name> and <site_urls_contents> into <document> in an elegant way
     if len(url_info['URLs']) <= 0:
@@ -2234,6 +2366,61 @@ BCG_URLData = {
 }
 
 URLData.update(BCG_URLData)
+
+
+# 贝恩咨询（Bain & Company）观点
+BAIN_URLData = {
+    '贝恩咨询(Bain & Company)观点-聚焦中国': {
+        'URLs': [
+            'https://www.bain.cn/news.php?id=15',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.card'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler18_BAIN_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler18_bain_news,
+    },
+    '贝恩咨询(Bain & Company)观点-全球视野': {
+        'URLs': [
+            'https://www.bain.cn/news.php?id=14',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.card'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler18_BAIN_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler18_bain_news,
+    },
+    '贝恩咨询(Bain & Company)观点-总裁专栏': {
+        'URLs': [
+            'https://www.bain.cn/news.php?id=32',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.card'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler18_BAIN_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler18_bain_news,
+    },
+    '贝恩咨询(Bain & Company)观点-署名文章': {
+        'URLs': [
+            'https://www.bain.cn/news.php?id=26',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.card'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler18_BAIN_zh.png',
+        'MaxItems': 10,
+        'HTMLContentHandler': handler18_bain_news,
+    },
+}
+
+URLData.update(BAIN_URLData)
 
 
 # ---------------------------------------------------------------------------------------------------------------------

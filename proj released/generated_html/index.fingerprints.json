@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-14T22:34:37",
+  "generated_at": "2025-10-15T11:48:25",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -9,15 +9,15 @@
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index.htm",
-      "etag": "W/\"68ed41dd-6f77\"",
-      "last_modified": "Mon, 13 Oct 2025 18:15:57 GMT",
-      "content_hash": "f35da52d5b56e5f2fec91b8c2fa2a52cdcad5e1370443f25e38f477fdfb7dd84"
+      "etag": "W/\"68ef0e5a-6fa1\"",
+      "last_modified": "Wed, 15 Oct 2025 03:00:42 GMT",
+      "content_hash": "f1642c8b8090347881bd91c8b978c5efaaeed4b02fedcedad3fe72c72dada80b"
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index1.htm",
-      "etag": "W/\"68ed41de-7020\"",
-      "last_modified": "Mon, 13 Oct 2025 18:15:58 GMT",
-      "content_hash": "f4d8ba65e6c5e34759f40d1e61c98f3dc7ba75a2d89f80cba077d95abc519c55"
+      "etag": "W/\"68ef0e5b-6fdb\"",
+      "last_modified": "Wed, 15 Oct 2025 03:00:43 GMT",
+      "content_hash": "f35da52d5b56e5f2fec91b8c2fa2a52cdcad5e1370443f25e38f477fdfb7dd84"
     },
     {
       "url": "http://www.cdi.com.cn/Article/List?ColumnId=102",
@@ -123,6 +123,30 @@
     },
     {
       "url": "https://www.amr.org.cn/ghdt/kydt/index_1.html",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.bain.cn/news.php?id=14",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.bain.cn/news.php?id=15",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.bain.cn/news.php?id=26",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://www.bain.cn/news.php?id=32",
       "etag": "",
       "last_modified": "",
       "content_hash": ""
@@ -477,6 +501,10 @@
     "https://nsd.pku.edu.cn/sylm/gd/index2.htm (undetermined)",
     "https://www.amr.org.cn/ghdt/kydt/index.html (undetermined)",
     "https://www.amr.org.cn/ghdt/kydt/index_1.html (undetermined)",
+    "https://www.bain.cn/news.php?id=14 (undetermined)",
+    "https://www.bain.cn/news.php?id=15 (undetermined)",
+    "https://www.bain.cn/news.php?id=26 (undetermined)",
+    "https://www.bain.cn/news.php?id=32 (undetermined)",
     "https://www.bcg.com/publications (undetermined)",
     "https://www.cas.cn/yw/index.shtml (undetermined)",
     "https://www.cas.cn/yw/index_1.shtml (undetermined)",
@@ -535,5 +563,5 @@
     "https://www.sass.org.cn/5867/list.htm (undetermined)",
     "https://www.sass.org.cn/5867/list2.htm (undetermined)"
   ],
-  "total_urls": 78
+  "total_urls": 82
 }

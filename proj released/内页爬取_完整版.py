@@ -266,9 +266,167 @@ def parse_bcg_article(soup: BeautifulSoup, url: str, publish_date: str):
         return None
 
 
+def parse_bain_article(soup: BeautifulSoup, url: str, publish_date: str):
+    """
+    解析贝恩咨询（bain.cn）文章页：
+    - 标题：优先 detail-content > .content-title h3；兜底 h1 / meta og:title / <title>
+    - 正文：优先 detail-content > .content 段落文本；若抓空再回退通用提取
+    - 日期：优先 meta/time；缺失则使用列表页日期
+    - 作者：尝试从 meta[name=author]、正文“作者信息”块提取作者姓名
+    - 附件：优先文档（pdf/doc/xls/ppt 等）；若仅有音/视频则返回其 URL；并存时仅保留文档
+    - thinkank_name：统一填写为“贝恩咨询（Bain & Company）”
+    """
+    try:
+        # 标题
+        title = ''
+        t = soup.select_one('div.detail-content .content-title h3') or soup.select_one('h1')
+        if t and t.get_text(strip=True):
+            title = clean_text(t.get_text())
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+
+        # 正文：尽量按段落拼接，避免空段落与冗余样式干扰
+        content = ''
+        main_scope = soup.select_one('div.detail-content') or soup
+        body = main_scope.select_one('div.content') or main_scope
+        if body is not None:
+            paras = []
+            for node in body.select('p, li, h2, h3, h4'):
+                txt = (node.get_text('\n', strip=True) or '').strip()
+                # 跳过纯空/仅符号段落
+                if not txt or len(txt.replace('\u3000', '').replace('\xa0', '').strip()) == 0:
+                    continue
+                paras.append(clean_text(txt))
+            if not paras:
+                # 兜底：直接取整个 body 文本
+                bulk = body.get_text('\n', strip=True)
+                if bulk:
+                    content = clean_text(bulk)
+            else:
+                content = ' '.join(paras)
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期
+        pub = ''
+        try:
+            mt = soup.select_one('meta[property="article:published_time"][content]')
+            if mt and mt.get('content'):
+                m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt['content'])
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            if not pub:
+                tnode = soup.select_one('time[datetime]')
+                if tnode and tnode.get('datetime'):
+                    m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', tnode['datetime'])
+                    if m2:
+                        pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        except Exception:
+            pass
+        if not pub:
+            pub = publish_date or ''
+
+        # 作者（可检测到则填写）
+        authors = ''
+        try:
+            # meta 优先
+            meta_author = soup.select_one('meta[name="author"][content]')
+            if meta_author and meta_author.get('content'):
+                authors = clean_text(meta_author['content'])
+            if not authors:
+                # 正文“作者信息”：定位包含“作者信息”的段落，收集其后的若干非空行
+                scope = main_scope
+                ps = scope.select('div.content p') or scope.select('p')
+                idx = -1
+                for i, p in enumerate(ps):
+                    t0 = p.get_text(strip=True)
+                    if t0 and ('作者信息' in t0 or '作者' in t0):
+                        idx = i
+                        break
+                names = []
+                if idx >= 0:
+                    for j in range(idx + 1, min(idx + 6, len(ps))):  # 向后取最多 5 段
+                        txt = (ps[j].get_text(' ', strip=True) or '').strip()
+                        if not txt:
+                            break
+                        # 截断头尾标点/空字符
+                        names.append(clean_text(txt))
+                if names:
+                    # 仅保留前两行作者简介中的姓名（逗号/顿号/空格分隔，取每行第一段）
+                    extra = []
+                    for line in names[:3]:
+                        head = re.split(r'[，,\s]', line, maxsplit=1)[0]
+                        if head:
+                            extra.append(head)
+                    if extra:
+                        # 去重
+                        seen=set(); uniq=[]
+                        for n in extra:
+                            if n and n not in seen:
+                                seen.add(n); uniq.append(n)
+                        authors = '；'.join(uniq)
+        except Exception:
+            authors = ''
+
+        # 附件
+        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
+        file_urls, media_urls = set(), set()
+
+        def _maybe_add(u: str):
+            if not u:
+                return
+            lower = (u or '').lower(); full = url_join(url, u)
+            if any(lower.endswith(ext) for ext in file_exts):
+                file_urls.add(full)
+            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
+                media_urls.add(full)
+
+        scope = main_scope
+        for a in scope.select('a[href], a[data-href], a[data-url]'):
+            _maybe_add(a.get('href') or a.get('data-href') or a.get('data-url'))
+        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
+            for node in scope.select(sel):
+                _maybe_add(node.get('src'))
+        attachments = ''
+        if file_urls:
+            attachments = ' ; '.join(sorted(file_urls))
+        elif media_urls:
+            attachments = ' ; '.join(sorted(media_urls))
+
+        if not title or not content:
+            print(f"BAIN 文章解析失败：标题或正文为空: {url}")
+            return None
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': authors,
+            'thinkank_name': '贝恩咨询（Bain & Company）',
+            'summary': '',
+            'content': content,
+            'attachments': attachments,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 BAIN 页面失败: {url} 错误: {e}")
+        return None
+
+
 # ------------------------------ 通用抓取 ------------------------------
 def crawl_article_content(url, publish_date, headers, title_hint=None):
     lower_url = (url or '').lower()
+
+    # Bain China（bain.cn）：常规请求 + DOM 解析（优先于通用逻辑）
+    if 'bain.cn' in lower_url:
+        try:
+            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
+            if resp is None or resp.status_code >= 400 or not resp.text:
+                return None
+            soup = BeautifulSoup(resp.text, 'lxml')
+            return parse_bain_article(soup, url, publish_date)
+        except Exception:
+            return None
 
     # BCG：优先浏览器渲染（requests 经常被拦）
     if 'bcg.com' in lower_url:
@@ -390,4 +548,3 @@ if __name__ == '__main__':
         main(only_domain=dom)
     else:
         main()
-

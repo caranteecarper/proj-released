@@ -1,5 +1,23 @@
 # 更新日志 (Changelog)
 
+## 2025-10-15 (追加)
+- 新增：贝恩咨询（Bain & Company）（中文观点栏目）
+  - main.py：新增 `handler18_bain_news`，抓取四个栏目，每栏最多 10 条：
+    - 聚焦中国：https://www.bain.cn/news.php?id=15
+    - 全球视野：https://www.bain.cn/news.php?id=14
+    - 总裁专栏：https://www.bain.cn/news.php?id=32
+    - 署名文章：https://www.bain.cn/news.php?id=26
+    列表卡片解析（div.card → a[href]、.card-body .card-title、.card-footer），必要时按 `&page=` 翻页直至凑满 10 条；
+    在 `URLData` 末尾加入四个分组，板块标题分别为“贝恩咨询(Bain & Company)观点-聚焦中国/全球视野/总裁专栏/署名文章”，
+    Logo 统一使用 `./Logos/handler18_BAIN_zh.png`。
+  - 内页爬取_完整版.py：新增 `parse_bain_article` 并在域名分发中接入（bain.cn）。
+    - 标题与正文：优先 `div.detail-content .content-title h3` 与 `div.detail-content .content`，不足时回退通用解析；
+    - 日期：优先 meta/time，缺失则使用列表页日期；
+    - 作者：可检测到时写入作者姓名（meta[name=author] 或含“作者：”的文本）;
+    - 附件：优先文档（pdf/doc/xls/ppt 等）；若仅有音频/视频则将其 URL 作为附件；若与文档并存仅保留文档；
+    - `thinkank_name` 统一填写为“贝恩咨询（Bain & Company）”。
+  - 未新增其他文件，沿用原有输出结构与流程，保持设置不变。
+
 ## 2025-10-13 (追加)
 - 新增：麦肯锡中国（McKinsey & Company）（洞察）
   - main.py：新增 `handler15_mck_insights`（滚动加载，无“加载更多”按钮），采集前 20 条并输出为 `page-board-item`，加入 `MCK_URLData` 配置（Logo `./Logos/handler15_McK_zh.png`）。
