@@ -83,3 +83,12 @@
   - 内页爬取_完整版.py：新增 `parse_bcg_article` 并接入域名分发（bcg.com），解析标题、正文、日期与作者；
     附件策略与既有一致：优先文档，其次音/视频；并存时仅保留文档；`thinkank_name` 统一为“波士顿咨询（BCG）”。
   - 未新增其他文件，输出结构与现有完全一致。
+## 2025-10-17 (新增 IISS Online Analysis)
+- main.py
+  - 新增 `handler20_iiss_online_analysis`，定位 `div.filter_results.feature_list a.feature[href]` 并通过 `a.pagination__next` 翻页，收集前 40 条；标题显示为“国际战略研究所(iiss)（在线分析）”；Logo 使用 `./Logos/handler20_iiss.png`。
+  - 在 URLData 末尾新增 IISS 配置：`MaxItems=40`、`MaxPages=4`、`WaitingTimeLimitInSeconds=30`。
+- 内页爬取_完整版.py
+  - 新增 `parse_iiss_article`，抽取 `title/url/publish_date/authors/thinkank_name/summary/content/attachments`；`authors` 能检测到则使用文章作者姓名；`thinkank_name` 固定为“国际战略研究所(iiss)”。
+  - `attachments` 规则：优先返回文档型（pdf/doc/xls/ppt 等），若无则返回音频/视频链接；若文档与音视频同时存在，则仅返回文档链接。
+  - 在 `crawl_article_content` 中增加 `iiss.org` 分支：优先 `requests`，403/空白时回退到 `undetected-chromedriver` 获取 HTML。
+- 保持 index 渲染与既有站点一致，不改动其它设置。

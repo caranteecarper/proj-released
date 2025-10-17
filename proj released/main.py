@@ -2024,6 +2024,217 @@ def handler9_cdi_files(chrome_page_render: ChromePageRender, document: HTMLDocum
     return None
 
 
+def handler20_iiss_online_analysis(
+        chrome_page_render: ChromePageRender,
+        document: HTMLDocument,
+        url_name: str,
+        url_info: dict
+) -> None:
+    """
+    IISS Online Analysis list handler
+
+    - Opens the main list page and parses anchor cards under
+      `div.filter_results.feature_list a.feature[href]`.
+    - Uses the native pagination "next" control that navigates to page 2, 3, ...
+      We click the `a.pagination__next` and wait for page content to update.
+    - Collects up to MaxItems (default 40), which is 4 pages x 10 items each as requested.
+    - Renders each item as page-board-item: <a><h3>title</h3><span>date?></span>
+      Date may be empty when not present in the list; detail page parser will fill real publish date.
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+    base_url = urls[0]
+    max_items = int(url_info.get('MaxItems', 40))
+    max_pages = int(url_info.get('MaxPages', max(1, (max_items + 9) // 10)))
+
+    # Build a local undetected chrome instance for robustness (403 avoidance, consent banners)
+    local_options = ChromeOptions()
+    try:
+        local_options.page_load_strategy = 'none'
+    except Exception:
+        pass
+    local_options.add_argument('--disable-blink-features=AutomationControlled')
+    local_options.add_argument('--ignore-certificate-errors')
+    local_options.add_argument('--ignore-ssl-errors')
+    local_options.add_argument('--allow-running-insecure-content')
+    local_options.add_argument('--disable-web-security')
+    local_options.add_argument('--disable-site-isolation-trials')
+    local_options.add_argument('--test-type')
+    local_options.set_capability('acceptInsecureCerts', True)
+    local_options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    )
+
+    _local_cpr = ChromePageRender(
+        chrome_driver_filepath=__chrome_driver_path,
+        options=local_options,
+        use_undetected_chromedriver=True
+    )
+
+    def _try_accept_cookies():
+        # Best-effort cookie/consent dismissal
+        for sel in [
+            'button#onetrust-accept-btn-handler',
+            'button[aria-label*="accept" i]',
+            'button[aria-label*="agree" i]',
+            'button[class*="cookie" i][class*="accept" i]',
+        ]:
+            try:
+                is_timeout = _local_cpr.click_on_html_element(
+                    click_element_selector_type='css',
+                    click_element_selector_rule=sel,
+                    use_javascript=True,
+                    max_trials_for_unstable_page=2,
+                    click_waiting_timeout_in_seconds=min(5, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                    print_error_log_to_console=False
+                )
+                if is_timeout is False:
+                    break
+            except Exception:
+                continue
+
+    def _extract_items(html: str, base: str):
+        soup = BeautifulSoup(html or '', 'html.parser')
+        root = soup.select_one('div.filter_results.feature_list') or soup
+        items = []
+        seen = set()
+        anchors = root.select('a.feature[href]')
+        if not anchors:
+            # Fallback: any anchor pointing to /online-analysis/
+            anchors = root.select('a[href*="/online-analysis/" i]')
+        for a in anchors:
+            href = a.get('href')
+            if not href:
+                continue
+            full = url_join(base, href)
+            if full in seen:
+                continue
+            title = a.get_text(strip=True) or ''
+            if not title:
+                # Try inner heading
+                h = a.select_one('h2, h3')
+                if h and h.get_text(strip=True):
+                    title = h.get_text(strip=True)
+            # Optional date (not always present in list)
+            date_text = ''
+            t = a.select_one('time[datetime]')
+            if t is None:
+                # Sometimes placed near the anchor
+                t = a.find_next('time')
+            if t is not None:
+                raw = t.get('datetime') or t.get_text(strip=True)
+                try:
+                    m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', raw or '')
+                    if m:
+                        date_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                except Exception:
+                    date_text = ''
+            if title:
+                items.append((full, title, date_text))
+                seen.add(full)
+        return items
+
+    def _goto(url: str) -> bool:
+        is_timeout = _local_cpr.goto_url_waiting_for_selectors(
+            url=url,
+            selector_types_rules=[
+                ('css', 'div.filter_results.feature_list'),
+            ],
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=True
+        )
+        if is_timeout:
+            return False
+        _try_accept_cookies()
+        return True
+
+    def _current_page_num(html: str) -> int:
+        try:
+            soup = BeautifulSoup(html or '', 'html.parser')
+            s = soup.select_one('div.pagination span.pagination__title')
+            if s and s.get_text(strip=True):
+                m = re.search(r'(\d+)', s.get_text(strip=True))
+                if m:
+                    return int(m.group(1))
+        except Exception:
+            pass
+        return 0
+
+    def _try_click_next(curr_html: str) -> bool:
+        try:
+            pg = _current_page_num(curr_html)
+        except Exception:
+            pg = 0
+        try:
+            # Click next; if disabled or missing, stop
+            soup = BeautifulSoup(curr_html or '', 'html.parser')
+            nxt = soup.select_one('a.pagination__next')
+            if nxt is None:
+                return False
+            cls = (nxt.get('class') or [])
+            if any('disabled' == c or 'is-disabled' == c for c in cls):
+                return False
+            is_timeout = _local_cpr.click_on_html_element(
+                click_element_selector_type='css',
+                click_element_selector_rule='a.pagination__next',
+                use_javascript=True,
+                max_trials_for_unstable_page=2,
+                click_waiting_timeout_in_seconds=min(6, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                print_error_log_to_console=False
+            )
+            if is_timeout:
+                return False
+            # Wait for page number to change or list to refresh
+            for _ in range(24):  # ~12s
+                sleep(0.5)
+                new_html = _local_cpr.get_page_source()
+                new_pg = _current_page_num(new_html)
+                if (pg and new_pg and new_pg != pg) or (new_html and new_html != curr_html):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    # 1) Open base page
+    if not _goto(base_url):
+        return None
+
+    # 2) Collect across pages until MaxItems or MaxPages
+    results = []
+    visited_pages = 0
+    while visited_pages < max_pages and len(results) < max_items:
+        html = _local_cpr.get_page_source()
+        items = _extract_items(html, base_url)
+        if items:
+            # Deduplicate while preserving order
+            seen = set(u for (u, _, _) in results)
+            for it in items:
+                if it[0] not in seen:
+                    results.append(it)
+                    seen.add(it[0])
+        visited_pages += 1
+        if visited_pages >= max_pages or len(results) >= max_items:
+            break
+        # Move next page
+        if not _try_click_next(html):
+            break
+
+    # 3) Render into the document
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in results[:max_items]:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
+
 URLData = {
     '中国国际工程咨询有限公司（智库建议）': {
         'URLs': [
@@ -2660,6 +2871,24 @@ EY_URLData = {
 }
 
 URLData.update(EY_URLData)
+
+IISS_URLData = {
+    '国际战略研究所(iiss)（在线分析）': {
+        'URLs': [
+            'https://www.iiss.org/online-analysis/',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'div.filter_results.feature_list'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler20_iiss.png',
+        'MaxItems': 10,
+        'MaxPages': 1,
+        'HTMLContentHandler': handler20_iiss_online_analysis,
+    },
+}
+
+URLData.update(IISS_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |
