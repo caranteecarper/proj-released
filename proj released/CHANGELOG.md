@@ -1,5 +1,16 @@
 # 更新日志 (Changelog)
 
+## 2025-10-19 (新增 复旦大学中国研究院 内页爬取)
+- 内页爬取_完整版.py
+  - 新增 `parse_fudan_article`，并在 `crawl_article_content` 中接入域名路由（`cifu.fudan.edu.cn`）。
+  - 字段与规则：
+    - `title`/`content`：优先常见正文容器（`div.wp_articlecontent` 等），不足时回退通用提取。
+    - `publish_date`：优先解析“发布日期/发布时间”等字段；识别 `YYYY-MM-DD` 或 `YYYY年MM月DD日` 并标准化为 `YYYY-MM-DD`；缺失则使用列表页日期。
+    - `authors`：尽力从“作者/撰文/撰稿/文/”等文本提取作者姓名（可检测到则写作者姓名）。
+    - `thinkank_name`：统一填写为“复旦大学中国研究院”。
+    - `attachments`：优先返回文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；当文档与音/视频并存时仅保留文档 URL。
+  - 保持既有输出 JSON 结构与其它设置不变，不新增其他文件。
+
 ## 2025-10-19 (新增 德勤中国 月度经济概览)
 - main.py
   - 新增 `handler22_deloitte_monthly`，抓取“德勤中国（Deloitte）—月度经济概览”栏目，按期号链接抽取并渲染 `.page-board-item`（标题+日期）。

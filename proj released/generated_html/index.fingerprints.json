@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-19T11:07:20",
+  "generated_at": "2025-10-19T15:49:07",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -90,6 +90,36 @@
       "etag": "",
       "last_modified": "",
       "content_hash": "02664350320ea4fe910e6e4d9f434eeb27fa62a0624c0e50a6320201383abe83"
+    },
+    {
+      "url": "https://cifu.fudan.edu.cn/",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://cifu.fudan.edu.cn/12233/list.htm",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://cifu.fudan.edu.cn/412/list.htm",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://cifu.fudan.edu.cn/413/list.htm",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
+    },
+    {
+      "url": "https://cifu.fudan.edu.cn/xslw/list.htm",
+      "etag": "",
+      "last_modified": "",
+      "content_hash": ""
     },
     {
       "url": "https://kpmg.com/cn/zh/home/insights.html",
@@ -537,6 +567,11 @@
     }
   ],
   "changed_urls": [
+    "https://cifu.fudan.edu.cn/ (first-check)",
+    "https://cifu.fudan.edu.cn/12233/list.htm (first-check)",
+    "https://cifu.fudan.edu.cn/412/list.htm (first-check)",
+    "https://cifu.fudan.edu.cn/413/list.htm (first-check)",
+    "https://cifu.fudan.edu.cn/xslw/list.htm (first-check)",
     "https://kpmg.com/cn/zh/home/insights.html (undetermined)",
     "https://nsd.pku.edu.cn/sylm/gd/index.htm (undetermined)",
     "https://nsd.pku.edu.cn/sylm/gd/index1.htm (undetermined)",
@@ -612,5 +647,5 @@
     "https://www.sass.org.cn/5867/list.htm (undetermined)",
     "https://www.sass.org.cn/5867/list2.htm (undetermined)"
   ],
-  "total_urls": 89
+  "total_urls": 94
 }

@@ -1911,6 +1911,80 @@ def handler8_cdi_articles(chrome_page_render: ChromePageRender, document: HTMLDo
     return None
 
 
+def handler11_fudan(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    复旦大学中国研究院 列表页解析
+
+    页面结构（示例）：table.wp_article_list_table 中的每个单元格包含一个嵌套 table，
+    左侧 td[align="left"] 内为 <a> 链接和标题，右侧 td[align="right"] 为日期。
+
+    输出结构保持与既有站点一致：
+    - 容器：div.page-board
+    - 每条：div.page-board-item > a[href] > h3(title) + span(date)
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+
+    urls_contents = {}
+    for url in urls:
+        html_content = None
+        try:
+            # 优先使用等待选择器的方式，保证表格渲染完成
+            is_timeout = chrome_page_render.goto_url_waiting_for_selectors(
+                url=url,
+                selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', []),
+                waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+                print_error_log_to_console=True
+            )
+            if not is_timeout:
+                html_content = chrome_page_render.get_page_source()
+        except Exception:
+            html_content = None
+        urls_contents[url] = html_content
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info['LogoPath'], alt='Missing Logo')
+            with HTMLTags.a(href=urls[0]):
+                HTMLTags.h2(url_name)
+
+            for (url, html_content) in urls_contents.items():
+                if not html_content:
+                    continue
+                soup = BeautifulSoup(html_content, 'html.parser')
+
+                list_table = soup.select_one('table.wp_article_list_table')
+                if not list_table:
+                    continue
+
+                # 每个新闻位于嵌套表格中：tr > td > table
+                for news_cell in list_table.select('tr > td'):
+                    nested_table = news_cell.select_one('table')
+                    if not nested_table:
+                        continue
+
+                    link_cell = nested_table.select_one('td[align="left"] a')
+                    date_cell = nested_table.select_one('td[align="right"]')
+                    if not link_cell:
+                        continue
+
+                    title_text = link_cell.get_text(strip=True)
+                    href = link_cell.get('href')
+                    if not title_text or not href:
+                        continue
+
+                    a_href = url_join(url, href)
+                    date_text = date_cell.get_text(strip=True) if date_cell else ''
+
+                    with HTMLTags.div(cls='page-board-item'):
+                        with HTMLTags.a(href=a_href):
+                            HTMLTags.h3(title_text)
+                            if date_text:
+                                HTMLTags.span(date_text)
+    return None
+
+
 def handler19_ey_hub(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
     """
     EY China hub/list handler
@@ -3279,6 +3353,61 @@ DELOITTE_URLData = {
 }
 
 URLData.update(DELOITTE_URLData)
+
+# 复旦大学中国研究院
+FUDAN_URLData = {
+    '复旦大学中国研究院（动态新闻）': {
+        'URLs': [
+            'https://cifu.fudan.edu.cn/',
+            'https://cifu.fudan.edu.cn/412/list.htm'
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'table[width="778"]'),
+            ('css', 'table.wp_article_list_table'),
+            ('css', 'body')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler11_Fudan.png',
+        'HTMLContentHandler': handler11_fudan
+    },
+    '复旦大学中国研究院（评论观点）': {
+        'URLs': [
+            'https://cifu.fudan.edu.cn/413/list.htm'
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'table.wp_article_list_table'),
+            ('css', 'body')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler11_Fudan.png',
+        'HTMLContentHandler': handler11_fudan
+    },
+    '复旦大学中国研究院（东方学刊）': {
+        'URLs': [
+            'https://cifu.fudan.edu.cn/12233/list.htm'
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'table.wp_article_list_table'),
+            ('css', 'body')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler11_Fudan.png',
+        'HTMLContentHandler': handler11_fudan
+    },
+    '复旦大学中国研究院（学术研究）': {
+        'URLs': [
+            'https://cifu.fudan.edu.cn/xslw/list.htm'
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'table.wp_article_list_table'),
+            ('css', 'body')
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler11_Fudan.png',
+        'HTMLContentHandler': handler11_fudan
+    },
+}
+URLData.update(FUDAN_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |
