@@ -2389,6 +2389,173 @@ def handler20_iiss_online_analysis(
                         HTMLTags.span(span_text or '')
     return None
 
+
+def handler22_deloitte_monthly(chrome_page_render: ChromePageRender, document: HTMLDocument, url_name: str, url_info: dict) -> None:
+    """
+    德勤中国（Deloitte）《月度经济概览》栏目列表抓取（仅取前 MaxItems 条，默认 5 条）
+
+    页面为 AEM 站点，结构会随组件变化，但“期号”链接稳定为
+    /cn/zh/services/consulting/perspectives/deloitte-research-issue-XX.html。
+
+    抽取策略：
+    - 加载栏目页，尽力关闭 Cookie/隐私弹窗（OneTrust）。
+    - 在页面内查找所有 a[href*="deloitte-research-issue-"] 的链接；
+      对于“了解更多”等无标题的链接，尝试就近的 h3/h4 文本作为标题；
+      如仍为空，则用“第{issue}期”占位。
+    - 日期：优先在同一文本块内解析中文日期（YYYY年M月D日）；若未找到则置空，
+      详细发布日期由内页解析时弥补。
+    - 去重：按 issue 序号去重，并按序号倒序取前 MaxItems。
+
+    渲染：与既有板块一致，生成 .page-board/.page-board-item 结构，
+    每条包含 <a><h3>标题</h3><span>日期(可空)</span>。
+    """
+    urls = url_info.get('URLs', []) or []
+    if not urls:
+        return None
+
+    base_url = urls[0]
+    max_items = int(url_info.get('MaxItems', 5))
+
+    # 1) 打开栏目页并等待主要内容
+    try:
+        chrome_page_render.goto_url(url=base_url)
+    except Exception:
+        pass
+
+    # 关 Cookie 弹窗（若存在）
+    for sel in [
+        ('css', 'button#onetrust-accept-btn-handler'),
+        ('css', 'button[aria-label*="accept" i]'),
+        ('css', 'button[aria-label*="同意" i]'),
+        ('xpath', "//button[contains(., 'Accept') or contains(., '同意')]"),
+    ]:
+        try:
+            chrome_page_render.click_on_html_element(
+                click_element_selector_type=sel[0],
+                click_element_selector_rule=sel[1],
+                use_javascript=True,
+                max_trials_for_unstable_page=1,
+                click_waiting_timeout_in_seconds=min(6, url_info.get('WaitingTimeLimitInSeconds', 10)),
+                print_error_log_to_console=False,
+            )
+        except Exception:
+            continue
+
+    try:
+        chrome_page_render.wait_for_selectors(
+            wait_type='appear',
+            selector_types_rules=url_info.get('RulesAwaitingSelectors(Types,Rules)', [
+                ('css', 'main'),
+                ('css', 'a[href*="deloitte-research-issue-"]'),
+                ('css', 'div.cmp-text'),
+            ]),
+            waiting_timeout_in_seconds=url_info.get('WaitingTimeLimitInSeconds', 10),
+            print_error_log_to_console=False,
+        )
+    except Exception:
+        pass
+
+    # 2) 解析条目
+    try:
+        html = chrome_page_render.get_page_source()
+    except Exception:
+        html = ''
+
+    soup = BeautifulSoup(html or '', 'html.parser')
+
+    def _parse_cn_date_to_iso(s: str) -> str:
+        try:
+            if not isinstance(s, str):
+                return ''
+            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
+            if m:
+                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        except Exception:
+            pass
+        return ''
+
+    # 收集 issue -> (href, title, date)
+    issue_map = {}
+    seen_hrefs = set()
+    anchors = soup.select('a[href*="deloitte-research-issue-"]')
+    for a in anchors:
+        href = a.get('href') or ''
+        if not href:
+            continue
+        full = url_join(base_url, href)
+        if full in seen_hrefs:
+            continue
+        seen_hrefs.add(full)
+
+        m = re.search(r'issue[-_/]?(\d+)', href)
+        issue_no = int(m.group(1)) if m else -1
+
+        # 标题：优先同块中 h3/h4，其次 a 文本，最后占位
+        title = (a.get_text(strip=True) or '').strip()
+        if (not title) or ('了解更多' in title) or (len(title) <= 2):
+            block = None
+            try:
+                for _ in range(3):
+                    block = (block or a)
+                    block = block.find_parent('div')
+                    if block is None:
+                        break
+                    classes = ' '.join(block.get('class') or [])
+                    if ('cmp-text' in classes) or ('text-v2' in classes):
+                        break
+            except Exception:
+                block = a.find_parent('div') or a
+            ctx_title = ''
+            if block is not None:
+                h = block.select_one('h4, h3')
+                if h and h.get_text(strip=True):
+                    ctx_title = h.get_text(strip=True)
+            title = ctx_title or title
+        if (not title) and issue_no > 0:
+            title = f"第{issue_no}期"
+
+        # 日期：就近文本内解析中文日期
+        date_text = ''
+        block = a.find_parent('div') or a
+        try:
+            blk_txt = block.get_text(' ', strip=True)
+            date_text = _parse_cn_date_to_iso(blk_txt)
+        except Exception:
+            date_text = ''
+
+        # 写入：按 issue 去重，优先保留标题更长/带日期的版本
+        if issue_no not in issue_map:
+            issue_map[issue_no] = (full, title, date_text)
+        else:
+            old = issue_map[issue_no]
+            better = old
+            if (len(title) > len(old[1])) or (not old[2] and date_text):
+                better = (full, title, date_text)
+            issue_map[issue_no] = better
+
+    # 3) 排序与渲染
+    entries = []
+    for k, v in issue_map.items():
+        if k > 0:
+            entries.append((k, v))
+    entries.sort(key=lambda x: x[0], reverse=True)
+    items = [v for (_, v) in entries][:max_items]
+
+    with document.body:
+        with HTMLTags.div(cls='page-board'):
+            HTMLTags.img(cls='site-logo', src=url_info.get('LogoPath', './Logos/handler22_deloitte.png'), alt='Missing Logo')
+            with HTMLTags.a(href=base_url):
+                HTMLTags.h2(url_name)
+            for (a_href, h3_text, span_text) in items:
+                with HTMLTags.div(cls='page-board-item'):
+                    with HTMLTags.a(href=a_href):
+                        HTMLTags.h3(h3_text)
+                        HTMLTags.span(span_text or '')
+    return None
+
 URLData = {
     '中国国际工程咨询有限公司（智库建议）': {
         'URLs': [
@@ -3092,6 +3259,26 @@ ICCS_URLData = {
 }
 
 URLData.update(ICCS_URLData)
+
+# --------------------------- 德勤中国（Deloitte） ---------------------------
+DELOITTE_URLData = {
+    '德勤中国(Deloitte)（月度经济概览）': {
+        'URLs': [
+            'https://www.deloitte.com/cn/zh/services/consulting/perspectives/deloitte-research-monthly-report.html',
+        ],
+        'RulesAwaitingSelectors(Types,Rules)': [
+            ('css', 'main'),
+            ('css', 'div.cmp-text'),
+            ('css', 'a[href*="deloitte-research-issue-"]'),
+        ],
+        'WaitingTimeLimitInSeconds': 30,
+        'LogoPath': './Logos/handler22_deloitte.png',
+        'MaxItems': 5,
+        'HTMLContentHandler': handler22_deloitte_monthly,
+    },
+}
+
+URLData.update(DELOITTE_URLData)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # |                                   Change Detection Module (轻量变更检测)                                          |

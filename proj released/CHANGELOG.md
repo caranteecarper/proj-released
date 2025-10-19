@@ -1,5 +1,13 @@
 # 更新日志 (Changelog)
 
+## 2025-10-19 (新增 德勤中国 月度经济概览)
+- main.py
+  - 新增 `handler22_deloitte_monthly`，抓取“德勤中国（Deloitte）—月度经济概览”栏目，按期号链接抽取并渲染 `.page-board-item`（标题+日期）。
+  - 新增 `DELOITTE_URLData`，标题为“德勤中国(Deloitte)（月度经济概览）”，Logo `./Logos/handler22_deloitte.png`，默认取前 5 条。
+- 内页爬取_完整版.py
+  - 新增 `parse_deloitte_article` 并在 `crawl_article_content` 中接入域名 `deloitte.com`。
+  - 字段与规则：authors 能检测到则写作者姓名；`thinkank_name` 固定“德勤中国（Deloitte）”；附件优先文档（pdf/doc/xls/ppt 等），若无文档而有音/视频则返回其 URL；若文档与音/视频并存仅保留文档 URL。
+
 ## 2025-10-17 (新增 清华大学国情研究院)
 - main.py
   - 新增 `handler21_iccs_research`，用于清华大学国情研究院网站研究栏目列表页解析，抽取链接/标题/日期并渲染为 `.page-board-item`。
