@@ -783,9 +783,186 @@ def parse_iiss_article(soup: BeautifulSoup, url: str, publish_date: str):
         print(f"解析 IISS 页面失败: {url} 原因: {e}")
         return None
 
+
+# ------------------------------ 站点解析：清华大学国情研究院（ICCS） ------------------------------
+def parse_iccs_article(soup: BeautifulSoup, url: str, publish_date: str):
+    """
+    解析 清华大学国情研究院（iccs.tsinghua.edu.cn） 文章页：
+    - 标题：优先 h1 / og:title / <title>
+    - 正文：优先常见正文容器，回退通用提取
+    - 日期：尝试 time/meta/页面文本中的 YYYY-MM-DD/年-月-日
+    - 作者：尽力从“作者/撰文/撰稿”等字段提取姓名；若无法可靠获取则留空
+    - 附件：优先返回文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；并存时仅返回文档
+    - thinkank_name：统一填写为“清华大学国情研究院”
+    """
+    try:
+        # 标题
+        title = ''
+        tnode = (
+            soup.select_one('h1') or
+            soup.select_one('.article-title h1') or
+            soup.select_one('.title h1') or
+            soup.select_one('.detail h1')
+        )
+        if tnode and tnode.get_text(strip=True):
+            title = clean_text(tnode.get_text())
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+
+        # 正文
+        def _scope_text(scope: BeautifulSoup) -> str:
+            if scope is None:
+                return ''
+            # 尽量按段落/标题拼接
+            parts = []
+            for node in scope.select('p, li, h2, h3, h4'):
+                txt = (node.get_text('\n', strip=True) or '').strip()
+                if not txt:
+                    continue
+                parts.append(clean_text(txt))
+            if parts:
+                return ' '.join(parts)
+            bulk = scope.get_text('\n', strip=True)
+            return clean_text(bulk)
+
+        main_scope = (
+            soup.select_one('article') or
+            soup.select_one('div.article') or
+            soup.select_one('div.content') or
+            soup.select_one('div.text') or
+            soup.select_one('div.con') or
+            soup.select_one('div.detail') or
+            soup
+        )
+        content = _scope_text(main_scope)
+        if not content:
+            content = generic_content_by_candidates(soup)
+
+        # 日期
+        pub = ''
+        # 优先 time/meta
+        tmeta = soup.select_one('time[datetime]')
+        if tmeta and tmeta.get('datetime'):
+            m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', tmeta.get('datetime'))
+            if m:
+                pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        if not pub:
+            # 常见“发布时间/日期”字段
+            date_nodes = soup.select('span, em, i, .date, .time, p')
+            for dn in date_nodes:
+                raw = dn.get_text(' ', strip=True)
+                m = re.search(r'(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})', raw)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        if not pub:
+            pub = publish_date or ''
+
+        # 作者（尽力提取“作者/撰文/撰稿”字段；避免把“来源”误当作者）
+        authors = ''
+        try:
+            possible_blocks = soup.select('p, div, span, li')
+            cand = []
+            for n in possible_blocks:
+                txt = (n.get_text(' ', strip=True) or '').strip()
+                if not txt:
+                    continue
+                if any(k in txt for k in ['作者', '撰文', '撰稿', '文/']):
+                    # 常见格式：“作者：张三 李四”、“撰文：张三”、“文/张三”
+                    # 去掉“来源/责任编辑”等
+                    if '来源' in txt or '责任编辑' in txt:
+                        continue
+                    cand.append(txt)
+            # 解析候选文本中的人名
+            names = []
+            for c in cand:
+                # 优先“作者：xxx”
+                m = re.search(r'(作者|撰文|撰稿)[:：]\s*([^|；;、，。\s][^；;，。]*)', c)
+                if m:
+                    part = m.group(2)
+                    # 分割常见分隔符
+                    for seg in re.split(r'[、，,;；和与及/\\]+', part):
+                        s = seg.strip()
+                        if s and (2 <= len(s) <= 20):
+                            names.append(clean_text(s))
+                    continue
+                # 次选“文/xxx”
+                m2 = re.search(r'文[/：:]\s*([^|；;、，。\s][^；;，。]*)', c)
+                if m2:
+                    s = m2.group(1).strip()
+                    if s and (2 <= len(s) <= 20):
+                        names.append(clean_text(s))
+            if names:
+                uniq = []
+                used = set()
+                for n in names:
+                    if n and n not in used:
+                        used.add(n)
+                        uniq.append(n)
+                authors = '、'.join(uniq)
+        except Exception:
+            authors = ''
+
+        # 附件：优先文档；否则音视频；并存仅保留文档
+        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
+        file_urls, media_urls = set(), set()
+
+        def _maybe_add(u: str):
+            if not u:
+                return
+            lower = (u or '').lower()
+            full = url_join(url, u)
+            if any(lower.endswith(ext) for ext in file_exts):
+                file_urls.add(full)
+            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
+                media_urls.add(full)
+
+        scope = soup.select_one('article') or soup
+        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
+            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
+        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
+            for node in scope.select(sel):
+                _maybe_add(node.get('src'))
+
+        attachments = ''
+        if file_urls:
+            attachments = ' ; '.join(sorted(file_urls))
+        elif media_urls:
+            attachments = ' ; '.join(sorted(media_urls))
+
+        if not title or not content:
+            print(f"ICCS 文章解析失败：标题或正文为空: {url}")
+            return None
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': authors,
+            'thinkank_name': '清华大学国情研究院',
+            'summary': '',
+            'content': content,
+            'attachments': attachments,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 ICCS 页面失败: {url} 错误: {e}")
+        return None
+
 # ------------------------------ 通用抓取 ------------------------------
 def crawl_article_content(url, publish_date, headers, title_hint=None):
     lower_url = (url or '').lower()
+
+    # 清华大学国情研究院（iccs.tsinghua.edu.cn）：常规请求 + DOM 解析
+    if 'iccs.tsinghua.edu.cn' in lower_url:
+        try:
+            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
+            if resp is None or resp.status_code >= 400 or not resp.text:
+                return None
+            soup = BeautifulSoup(resp.text, 'lxml')
+            return parse_iccs_article(soup, url, publish_date)
+        except Exception:
+            return None
 
     # IISS：iiss.org 先尝试 requests，若 403/空白再用 undetected-chromedriver 获取 HTML
     if 'iiss.org' in lower_url:

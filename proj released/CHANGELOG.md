@@ -1,5 +1,24 @@
 # 更新日志 (Changelog)
 
+## 2025-10-17 (新增 清华大学国情研究院)
+- main.py
+  - 新增 `handler21_iccs_research`，用于清华大学国情研究院网站研究栏目列表页解析，抽取链接/标题/日期并渲染为 `.page-board-item`。
+  - 在 `URLData` 末尾新增 3 个分组：
+    - 清华大学国情研究院（世情研究）：https://www.iccs.tsinghua.edu.cn/research/155.html
+    - 清华大学国情研究院（国情研究）：https://www.iccs.tsinghua.edu.cn/research/164.html
+    - 清华大学国情研究院（区情研究）：https://www.iccs.tsinghua.edu.cn/research/165.html
+    每组 `MaxItems=6`，`LogoPath=./Logos/handler21_Tsinghua.png`，标题与 Logo 已确认。
+- 内页爬取.py（将新增 iccs 详情页解析函数与域名分发分支）
+  - parse_iccs_article：
+    - 标题：h1/og:title/title 兜底；
+    - 正文：常见正文容器优先，回退通用提取；
+    - 日期：time/meta/正文文本中的 YYYY-MM-DD/年-月-日 提取为 YYYY-MM-DD；
+    - 作者：可检测到“作者/撰文/撰稿”等字段则写作者姓名；
+    - 附件：优先文档（pdf/doc/xls/ppt 等），若仅有音/视频则返回其 URL；并存时仅保留文档；
+    - thinkank_name：统一为“清华大学国情研究院”。
+  - 在 `crawl_article_content` 中接入 `iccs.tsinghua.edu.cn` 分支，使用 requests 抓取并路由到 `parse_iccs_article`。
+- 保持其它设置与输出格式不变；仅修改上述三个文件，无新增其他文件。
+
 ## 2025-10-15 (追加 — EY China)
 - 新增：安永中国（EY）两栏目（各取前 10 条）：
   - 安永中国(EY)（中国税务快讯）：https://www.ey.com/zh_cn/technical/china-tax-alerts
