@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-19T15:49:07",
+  "generated_at": "2025-11-16T20:43:05",
   "items": [
     {
       "url": "http://nads.ruc.edu.cn/zkcg/zcjb/szzcfxjb/index.htm",
@@ -9,15 +9,15 @@
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index.htm",
-      "etag": "W/\"68f3da1b-6fa8\"",
-      "last_modified": "Sat, 18 Oct 2025 18:19:07 GMT",
-      "content_hash": "ad9c8b505f9123152329575e40e4ed4ff2bc0e316acce4f80c2ae7113d4141f8"
+      "etag": "W/\"6918c792-6f8f\"",
+      "last_modified": "Sat, 15 Nov 2025 18:33:54 GMT",
+      "content_hash": "d530d3fc90b5b99005c3ee6cd305cf34848b423a83b625fcfd0bc3a669c05751"
     },
     {
       "url": "http://nads.ruc.edu.cn/zkdt/xzgd/index1.htm",
-      "etag": "W/\"68f3da1c-6fab\"",
-      "last_modified": "Sat, 18 Oct 2025 18:19:08 GMT",
-      "content_hash": "6d7d370214935091a7fff6f24cb08ec7586ec368f1b2879181933b4625492eb6"
+      "etag": "W/\"6918c792-6f8a\"",
+      "last_modified": "Sat, 15 Nov 2025 18:33:54 GMT",
+      "content_hash": "f1e721e81f835e328aa78fa04924aeff1cac83c64045ef7d268d3b2d9e790073"
     },
     {
       "url": "http://www.cdi.com.cn/Article/List?ColumnId=102",
@@ -567,11 +567,13 @@
     }
   ],
   "changed_urls": [
-    "https://cifu.fudan.edu.cn/ (first-check)",
-    "https://cifu.fudan.edu.cn/12233/list.htm (first-check)",
-    "https://cifu.fudan.edu.cn/412/list.htm (first-check)",
-    "https://cifu.fudan.edu.cn/413/list.htm (first-check)",
-    "https://cifu.fudan.edu.cn/xslw/list.htm (first-check)",
+    "http://nads.ruc.edu.cn/zkdt/xzgd/index.htm",
+    "http://nads.ruc.edu.cn/zkdt/xzgd/index1.htm",
+    "https://cifu.fudan.edu.cn/ (undetermined)",
+    "https://cifu.fudan.edu.cn/12233/list.htm (undetermined)",
+    "https://cifu.fudan.edu.cn/412/list.htm (undetermined)",
+    "https://cifu.fudan.edu.cn/413/list.htm (undetermined)",
+    "https://cifu.fudan.edu.cn/xslw/list.htm (undetermined)",
     "https://kpmg.com/cn/zh/home/insights.html (undetermined)",
     "https://nsd.pku.edu.cn/sylm/gd/index.htm (undetermined)",
     "https://nsd.pku.edu.cn/sylm/gd/index1.htm (undetermined)",
