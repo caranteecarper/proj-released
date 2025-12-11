@@ -3672,90 +3672,91 @@ def detect_changes_and_maybe_exit(url_data: Dict[str, Any]) -> Dict[str, Any]:
         'total_urls': len(seed_urls)
     }
 
+if __name__ == '__main__':
+    
+    # 在进入渲染构建之前执行变更检测
+    _CHANGE_DETECTION_RESULT = detect_changes_and_maybe_exit(URLData)
 
-# 在进入渲染构建之前执行变更检测
-_CHANGE_DETECTION_RESULT = detect_changes_and_maybe_exit(URLData)
+    # ---------------------------------------------------------------------------------------------------------------------
+    # |                   The following code collects online data and generates a new HTML page.                          |
+    # ---------------------------------------------------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------------------------------------------------
-# |                   The following code collects online data and generates a new HTML page.                          |
-# ---------------------------------------------------------------------------------------------------------------------
+    # 全局每页最大等待时间（秒）。若 10 秒内未就绪则跳过该页面。
+    PER_PAGE_MAX_WAIT_SECONDS = int(os.getenv('MAIN_PER_PAGE_TIMEOUT', '10'))
 
-# 全局每页最大等待时间（秒）。若 10 秒内未就绪则跳过该页面。
-PER_PAGE_MAX_WAIT_SECONDS = int(os.getenv('MAIN_PER_PAGE_TIMEOUT', '10'))
-
-# 将 URLData 中各站点配置的等待时间统一限制为不超过 5 秒。
-for _site, _cfg in URLData.items():
-    try:
-        prev = _cfg.get('WaitingTimeLimitInSeconds')
-        if isinstance(prev, (int, float)):
-            _cfg['WaitingTimeLimitInSeconds'] = min(int(prev), PER_PAGE_MAX_WAIT_SECONDS)
-        else:
+    # 将 URLData 中各站点配置的等待时间统一限制为不超过 5 秒。
+    for _site, _cfg in URLData.items():
+        try:
+            prev = _cfg.get('WaitingTimeLimitInSeconds')
+            if isinstance(prev, (int, float)):
+                _cfg['WaitingTimeLimitInSeconds'] = min(int(prev), PER_PAGE_MAX_WAIT_SECONDS)
+            else:
+                _cfg['WaitingTimeLimitInSeconds'] = PER_PAGE_MAX_WAIT_SECONDS
+        except Exception:
             _cfg['WaitingTimeLimitInSeconds'] = PER_PAGE_MAX_WAIT_SECONDS
-    except Exception:
-        _cfg['WaitingTimeLimitInSeconds'] = PER_PAGE_MAX_WAIT_SECONDS
 
 
-chrome_options = ChromeOptions()
-# chrome_options.add_argument('--incognito')
-chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-chrome_options.add_argument('--ignore-certificate-errors')
-chrome_options.add_argument('--ignore-ssl-errors')
-chrome_options.add_argument('--allow-running-insecure-content')
-chrome_options.add_argument('--disable-web-security')
-chrome_options.add_argument('--disable-site-isolation-trials')
-chrome_options.add_argument('--test-type')
-chrome_options.set_capability('acceptInsecureCerts', True)
-chrome_options.add_argument(
-    'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/110.0.0.0 Safari/537.36'
-)
-
-chrome_page_render = ChromePageRender(
-    chrome_driver_filepath=__chrome_driver_path,
-    options=chrome_options
-)
-
-# configure new HTML document header and body
-new_document: HTMLDocument = HTMLDocument(title='知名智库精选数据', lang='zh')
-with new_document.head:
-    HTMLTags.meta(
-        charset='utf-8',
-        name='viewport',
-        content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'
+    chrome_options = ChromeOptions()
+    # chrome_options.add_argument('--incognito')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--ignore-ssl-errors')
+    chrome_options.add_argument('--allow-running-insecure-content')
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--disable-site-isolation-trials')
+    chrome_options.add_argument('--test-type')
+    chrome_options.set_capability('acceptInsecureCerts', True)
+    chrome_options.add_argument(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/110.0.0.0 Safari/537.36'
     )
-    HTMLTags.link(rel='stylesheet', href='./index.css')
-    HTMLTags.script(src='./html2pdf.bundle.min.js')
-    HTMLTags.script(src='./index.js')
-with new_document.body:
-    HTMLTags.h1(
-        f"知名智库精选数据（更新时间：{current_time.year}/{current_time.month:02d}/{current_time.day:02d} "
-        f"{current_time.hour:02d}:{current_time.minute:02d}:{current_time.second:02d}）"
+
+    chrome_page_render = ChromePageRender(
+        chrome_driver_filepath=__chrome_driver_path,
+        options=chrome_options
     )
-    HTMLTags.div(cls='page-board search-container', id='search-container')
-for (url_name, url_info) in LoopMeter(URLData.items(), unit="site", unit_scale=False):
-    try:
-        url_info['HTMLContentHandler'](
-            chrome_page_render=chrome_page_render,
-            document=new_document,
-            url_name=url_name,
-            url_info=url_info
+
+    # configure new HTML document header and body
+    new_document: HTMLDocument = HTMLDocument(title='知名智库精选数据', lang='zh')
+    with new_document.head:
+        HTMLTags.meta(
+            charset='utf-8',
+            name='viewport',
+            content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'
         )
-    except Exception as e:
-        print(f"Skip site '{url_name}' due to error: {e}")
+        HTMLTags.link(rel='stylesheet', href='./index.css')
+        HTMLTags.script(src='./html2pdf.bundle.min.js')
+        HTMLTags.script(src='./index.js')
+    with new_document.body:
+        HTMLTags.h1(
+            f"知名智库精选数据（更新时间：{current_time.year}/{current_time.month:02d}/{current_time.day:02d} "
+            f"{current_time.hour:02d}:{current_time.minute:02d}:{current_time.second:02d}）"
+        )
+        HTMLTags.div(cls='page-board search-container', id='search-container')
+    for (url_name, url_info) in LoopMeter(URLData.items(), unit="site", unit_scale=False):
+        try:
+            url_info['HTMLContentHandler'](
+                chrome_page_render=chrome_page_render,
+                document=new_document,
+                url_name=url_name,
+                url_info=url_info
+            )
+        except Exception as e:
+            print(f"Skip site '{url_name}' due to error: {e}")
 
-try:
-    with open('./generated_html/index.html', 'w', encoding='utf-8') as html_file:
-        html_file.write(new_document.render(pretty=True))  # pretty makes the HTML file human-readable
-    print(f"Successfully output \"./generated_html/index.html\".")
-    # 构建成功后，更新指纹文件（非首次且检测模块已运行时）
     try:
-        if isinstance(_CHANGE_DETECTION_RESULT, dict) and _CHANGE_DETECTION_RESULT:
-            _save_fingerprints(FINGERPRINT_STORE_PATH, _CHANGE_DETECTION_RESULT)
+        with open('./generated_html/index.html', 'w', encoding='utf-8') as html_file:
+            html_file.write(new_document.render(pretty=True))  # pretty makes the HTML file human-readable
+        print(f"Successfully output \"./generated_html/index.html\".")
+        # 构建成功后，更新指纹文件（非首次且检测模块已运行时）
+        try:
+            if isinstance(_CHANGE_DETECTION_RESULT, dict) and _CHANGE_DETECTION_RESULT:
+                _save_fingerprints(FINGERPRINT_STORE_PATH, _CHANGE_DETECTION_RESULT)
+        except Exception as e:
+            print(f"Warning: failed to update fingerprints: {e}")
     except Exception as e:
-        print(f"Warning: failed to update fingerprints: {e}")
-except Exception as e:
-    print(f"Failed to output \"./generated_html/index.html\". Error: {e}")
+        print(f"Failed to output \"./generated_html/index.html\". Error: {e}")
 
 
 
