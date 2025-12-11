@@ -1390,12 +1390,36 @@ def handler16_pwc_zh_insights(chrome_page_render: ChromePageRender, document: HT
             s = s.strip()
             if not s:
                 return ''
+            # YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD
             m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s)
             if m:
                 return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            # YYYY年MM月DD日
             m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
             if m:
                 return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            # MM月 YYYY（无日，默认01日）
+            m = re.search(r'(\d{1,2})\s*月\s*(\d{4})', s)
+            if m:
+                return f"{int(m.group(2)):04d}-{int(m.group(1)):02d}-01"
+            # 英文月份（可含日或仅月+年）
+            months = {
+                'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+                'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+            }
+            m = re.search(r'([A-Za-z]+)\s+(\d{1,2}),?\s*(\d{4})', s)
+            if m:
+                mon = months.get(m.group(1).lower(), 0)
+                day = int(m.group(2))
+                yr = int(m.group(3))
+                if mon:
+                    return f"{yr:04d}-{mon:02d}-{day:02d}"
+            m = re.search(r'([A-Za-z]+)\s+(\d{4})', s)
+            if m:
+                mon = months.get(m.group(1).lower(), 0)
+                yr = int(m.group(2))
+                if mon:
+                    return f"{yr:04d}-{mon:02d}-01"
         except Exception:
             pass
         return ''
