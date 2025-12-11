@@ -1490,6 +1490,15 @@ def main(only_domain: str = '', force_domain: str = ''):
     OUTPUT_JSON_PATH = 'output_complete.json'
     existing_items, seen_urls = load_existing_results(OUTPUT_JSON_PATH)
     print(f"已有历史条目 {len(existing_items)}，将跳过已抓取 URL")
+    # 记录已存在条目的 URL -> 索引，便于更新 thinkank_name
+    existing_map = {}
+    for idx, rec in enumerate(existing_items):
+        try:
+            u = normalize_url(rec.get('url', ''))
+            if u:
+                existing_map[u] = idx
+        except Exception:
+            continue
 
     try:
         with open('generated_html/index.html', 'r', encoding='utf-8') as f:
@@ -1516,6 +1525,7 @@ def main(only_domain: str = '', force_domain: str = ''):
     print(f"找到 {len(nodes)} 条待处理" + (f"（仅 {only_domain}）" if only_domain else ''))
     lst = []
     run_seen = set()
+    updated_existing = False
 
     headers = {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
@@ -1530,7 +1540,24 @@ def main(only_domain: str = '', force_domain: str = ''):
                 pub = n.select('span')[0].get_text(strip=True)
             except Exception:
                 pub = ''
+            # 取所在板块标题作为 thinktank/栏目全名，避免多栏目合并后丢失栏目信息
+            board_name = ''
+            try:
+                parent_board = n.find_parent('div', class_='page-board')
+                h2 = parent_board.select_one('h2') if parent_board else None
+                board_name = h2.get_text(strip=True) if h2 else ''
+            except Exception:
+                board_name = ''
             nu = normalize_url(url)
+            # 若已有记录，且栏目名需要更新，则同步修正
+            if board_name and nu in existing_map:
+                try:
+                    idx = existing_map[nu]
+                    if existing_items[idx].get('thinkank_name') != board_name:
+                        existing_items[idx]['thinkank_name'] = board_name
+                        updated_existing = True
+                except Exception:
+                    pass
             # 若指定了 force_domain，且 URL 主机匹配该域，则忽略历史去重强制重抓
             skip_seen = True
             if force_domain:
@@ -1549,6 +1576,8 @@ def main(only_domain: str = '', force_domain: str = ''):
             print(f"[{i}/{len(nodes)}] 抓取: {url}")
             data = crawl_article_content(url, pub, headers)
             if data:
+                if board_name:
+                    data['thinkank_name'] = board_name
                 lst.append(data)
                 print(f"成功: {data['title'][:60]}...")
             else:
@@ -1558,11 +1587,16 @@ def main(only_domain: str = '', force_domain: str = ''):
             print(f"条目处理异常: {e}")
             continue
 
-    if lst:
+    if lst or updated_existing:
         combined = existing_items + lst
         with open(OUTPUT_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(combined, f, ensure_ascii=False, indent=2, default=str)
-        print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)}，累计 {len(combined)} 条")
+        if lst and updated_existing:
+            print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)}，并更新现有栏目名，累计 {len(combined)} 条")
+        elif lst:
+            print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)}，累计 {len(combined)} 条")
+        else:
+            print(f"已更新栏目名称，未新增内容，累计 {len(combined)} 条")
     else:
         print("未新增数据，output_complete.json 保持不变")
 
