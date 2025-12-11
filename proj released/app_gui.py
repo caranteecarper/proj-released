@@ -31,11 +31,28 @@ def get_corrected_logo_path(relative_path_in_main):
     if os.path.exists(corrected_path): return corrected_path
     return "https://img.icons8.com/fluency/96/image-file.png"
 
+# 🟢 核心分组逻辑 (用于 UI 也用于图表)
 def extract_group_name(full_name):
+    """
+    统一名称规则：把分散的子栏目合并成大智库名
+    """
+    if not isinstance(full_name, str): return "未知智库"
+    
+    # 强制合并规则
+    if '贝恩' in full_name or 'Bain' in full_name: return "贝恩公司 (Bain)"
+    if '兰德' in full_name or 'RAND' in full_name.upper(): return "兰德公司 (RAND)"
+    if '综合开发' in full_name: return "综合开发研究院"
+    if '麦肯锡' in full_name or 'McKinsey' in full_name: return "麦肯锡 (McKinsey)"
+    if '安永' in full_name or 'EY' in full_name.upper(): return "安永 (EY)"
+    if '普华永道' in full_name or 'PwC' in full_name: return "普华永道 (PwC)"
+    if '罗兰贝格' in full_name or 'Roland' in full_name: return "罗兰贝格 (Roland Berger)"
+    if '毕马威' in full_name or 'KPMG' in full_name: return "毕马威 (KPMG)"
+    if '中咨' in full_name or '工程咨询' in full_name: return "中国国际工程咨询有限公司"
+    
+    # 默认规则：去除括号
     pattern = r"[（(][^）)]+[）)]$"
     return re.sub(pattern, "", full_name).strip()
 
-# 🟢 优化：加入缓存，防止每次刷新都重新计算，稳定页面结构
 @st.cache_data
 def organize_thinktanks():
     groups = {}
@@ -61,37 +78,13 @@ def match_url_fallback(article_url):
             except: continue
     return "其他智库"
 
-# 关键词生成器 (带演示数据开关)
-def extract_clean_keywords(df):
-    """
-    为了软著截图效果，这里直接返回预设的高级热词
-    """
-    # 👇👇👇 演示专用假数据 (为了截图好看) 👇👇👇
-    fake_keywords = [
-        ("人工智能 (AI)", 980),
-        ("全球供应链", 850),
-        ("数字经济", 760),
-        ("碳中和", 690),
-        ("地缘政治", 620),
-        ("半导体产业", 550),
-        ("能源安全", 480),
-        ("公共卫生", 410),
-        ("通货膨胀", 350),
-        ("区域全面经济伙伴关系", 290)
-    ] 
-    return fake_keywords # 🛑 粘贴到代码报告的时候删除此行
-
-    # --- 真实逻辑 (被拦截) ---
-    if df.empty: return []
-    return []
-
 # --- 2. 状态管理 ---
 if 'nav_level' not in st.session_state: st.session_state['nav_level'] = 'gallery'
 if 'selected_group' not in st.session_state: st.session_state['selected_group'] = None
 if 'selected_sub_source' not in st.session_state: st.session_state['selected_sub_source'] = None
 if 'selected_article' not in st.session_state: st.session_state['selected_article'] = None
 
-# 🟢 回调函数：确保状态修改发生在渲染之前
+# 回调函数
 def cb_enter_group(group_name, sub_items):
     st.session_state['selected_group'] = group_name
     if len(sub_items) > 1:
@@ -118,12 +111,29 @@ def load_data():
     try:
         with open(JSON_FILE_PATH, 'r', encoding='utf-8') as f: raw_data = json.load(f)
         df = pd.DataFrame(raw_data)
-        mapping = { "source": "thinktank_name", "source_name": "thinktank_name", "article_title": "title", "link": "url", "href": "url", "publish_date": "date", "text": "content", "abstract": "summary", "author": "authors" }
+        
+        mapping = { 
+            "thinkank_name": "thinktank_name", 
+            "source": "thinktank_name", 
+            "source_name": "thinktank_name", 
+            "article_title": "title", 
+            "link": "url", 
+            "href": "url", 
+            "publish_date": "date", 
+            "text": "content", 
+            "abstract": "summary", 
+            "author": "authors" 
+        }
         df.rename(columns=mapping, inplace=True)
         
-        if 'thinktank_name' not in df.columns: df['thinktank_name'] = df['url'].apply(match_url_fallback)
-        else: df['thinktank_name'] = df.apply(lambda row: row['thinktank_name'] if (row['thinktank_name'] and str(row['thinktank_name']).strip()) else match_url_fallback(row['url']), axis=1)
+        if 'thinktank_name' not in df.columns: 
+            df['thinktank_name'] = df['url'].apply(match_url_fallback)
+        else: 
+            df['thinktank_name'] = df.apply(lambda row: row['thinktank_name'] if (row['thinktank_name'] and str(row['thinktank_name']).strip()) else match_url_fallback(row['url']), axis=1)
         
+        # 🟢 关键步骤：在数据加载时，就生成一个 grouped_name 列，用于画图
+        df['grouped_name'] = df['thinktank_name'].apply(extract_group_name)
+
         for col in ['title', 'date', 'authors', 'summary', 'content']:
             if col not in df.columns: df[col] = "暂无" if col != 'content' else ""
             
@@ -142,7 +152,7 @@ grouped_configs = organize_thinktanks()
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/data-configuration.png", width=70)
     st.markdown("### 智库情报决策系统")
-    st.caption("V16.0 Stable Core")
+    st.caption("V17.0 View Sync")
     st.markdown("---")
     def cb_reset():
         st.session_state['nav_level'] = 'gallery'
@@ -158,7 +168,7 @@ st.markdown("""
 
 st.title("🛡️ 多源异构智库数据汇聚与分析系统")
 
-# === 导航栏 (保持 Tabs) ===
+# === 导航栏 ===
 tab1, tab2, tab3, tab4 = st.tabs(["📊 决策驾驶舱", "📚 智库专栏浏览", "🗃️ 全量文章概览", "⚙️ 系统运维中心"])
 
 # ================= Tab 1: 决策驾驶舱 =================
@@ -167,7 +177,8 @@ with tab1:
     k1, k2, k3, k4 = st.columns(4)
     
     total_docs = len(df) if not df.empty else 0
-    total_sources = len(df['thinktank_name'].unique()) if not df.empty else 0
+    # 统计父级智库数量
+    total_sources = len(df['grouped_name'].unique()) if not df.empty else 0
     today_new = random.randint(3, 12) if not df.empty else 0 
     
     k1.metric("🏛️ 智库矩阵", f"{total_sources} 个", "覆盖全球", delta_color="off")
@@ -179,19 +190,23 @@ with tab1:
 
     row2_col1, row2_col2 = st.columns([2.2, 1])
     with row2_col1:
-        st.subheader("🌏 全球智库情报热力分布")
+        st.subheader("🌏 智库收录权重分布")
         if not df.empty:
-            chart_data = df.groupby('thinktank_name').agg(
+            # 🟢 修改点：使用 grouped_name 进行统计，确保和 Tab 2 分类一致
+            chart_data = df.groupby('grouped_name').agg(
                 article_count=('id', 'count'),
-                total_words=('word_count', 'sum')
+                # 为了气泡大小差异明显，可以加个系数
             ).reset_index()
-            chart_data['x'] = [random.randint(5, 95) for _ in range(len(chart_data))]
+            
+            # 生成随机坐标模拟气泡云
+            chart_data['x'] = [random.randint(10, 90) for _ in range(len(chart_data))]
             chart_data['y'] = [random.randint(10, 90) for _ in range(len(chart_data))]
             
-            base = alt.Chart(chart_data).encode(x=alt.X('x', axis=None), y=alt.Y('y', axis=None), tooltip=['thinktank_name', 'article_count'])
+            base = alt.Chart(chart_data).encode(x=alt.X('x', axis=None), y=alt.Y('y', axis=None), tooltip=['grouped_name', 'article_count'])
             bubbles = base.mark_circle(opacity=0.85, stroke='white', strokeWidth=1).encode(
-                size=alt.Size('article_count', title='文章量', scale=alt.Scale(range=[300, 3000]), legend=None),
-                color=alt.Color('thinktank_name', legend=alt.Legend(orient='bottom', columns=4, title=None, labelColor='white'), scale=alt.Scale(scheme='turbo')),
+                size=alt.Size('article_count', title='收录量', scale=alt.Scale(range=[500, 4000]), legend=None),
+                # 颜色区分智库
+                color=alt.Color('grouped_name', legend=alt.Legend(orient='bottom', columns=4, title=None, labelColor='white'), scale=alt.Scale(scheme='turbo')),
             ).interactive()
             st.altair_chart(bubbles, use_container_width=True, theme="streamlit")
         else:
@@ -235,25 +250,24 @@ with tab1:
             st.info("暂无趋势数据")
 
     with row3_col2:
-        st.subheader("🔥 核心内容热词 TOP 10")
+        # 这里改回展示智库排行 TOP 10，因为您现在关注的是智库本身
+        st.subheader("🏆 重点智库活跃度 TOP 10")
         if not df.empty:
-            keywords = extract_clean_keywords(df)
-            if keywords:
-                kw_df = pd.DataFrame(keywords, columns=['keyword', 'count'])
-                bar_chart = alt.Chart(kw_df).mark_bar(color='#FFD700').encode(
-                    x=alt.X('count', title=None),
-                    y=alt.Y('keyword', sort='-x', title=None, axis=alt.Axis(labelColor='white')),
-                    tooltip=['keyword', 'count']
-                ).properties(height=300)
-                st.altair_chart(bar_chart, use_container_width=True)
-            else:
-                st.info("数据量不足")
+            # 使用 grouped_name 统计
+            top_sources = df['grouped_name'].value_counts().head(10).reset_index()
+            top_sources.columns = ['thinktank', 'count']
+            
+            bar_chart = alt.Chart(top_sources).mark_bar(color='#FFD700').encode(
+                x=alt.X('count', title=None),
+                y=alt.Y('thinktank', sort='-x', title=None, axis=alt.Axis(labelColor='white')),
+                tooltip=['thinktank', 'count']
+            ).properties(height=300)
+            st.altair_chart(bar_chart, use_container_width=True)
         else:
             st.info("暂无数据")
 
 # ================= Tab 2: 智库专栏浏览 (Gallery) =================
 with tab2:
-    # 逻辑：父级墙 -> 子栏目墙 -> 列表 -> 详情
     if st.session_state['nav_level'] == 'gallery':
         st.subheader("🏛️ 全球智库索引 (按机构)")
         cols = st.columns(4)
@@ -265,14 +279,10 @@ with tab2:
                     with c1: st.image(logo_path, width=50)
                     with c2: st.markdown(f"**{group_name}**")
                     
-                    total_count = 0
-                    if not df.empty:
-                        target_names = [item['original_name'] for item in sub_items]
-                        total_count = len(df[df['thinktank_name'].isin(target_names)])
-                    
+                    target_names = [item['original_name'] for item in sub_items]
+                    total_count = len(df[df['thinktank_name'].isin(target_names)]) if not df.empty else 0
                     st.caption(f"子栏目: {len(sub_items)} | 收录: {total_count}")
                     
-                    # 🟢 这里的 key 确保唯一，回调函数确保状态更新后才刷新
                     st.button(f"进入 →", key=f"grp_{idx}", on_click=cb_enter_group, args=(group_name, sub_items))
 
     elif st.session_state['nav_level'] == 'sub_gallery':
@@ -307,7 +317,6 @@ with tab2:
         
         col_back, col_title = st.columns([1, 6])
         with col_back:
-            # 判断返回哪里
             target = 'sub_gallery' if len(grouped_configs[current_group]) > 1 else 'gallery'
             st.button("⬅ 返回", on_click=cb_go_back, args=(target,))
             

@@ -150,7 +150,7 @@ def parse_ciecc_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '中国国际工程咨询有限公司（智库建议）'
-        data['thinkank_name'] = '中国国际工程咨询有限公司'
+        data['thinktank_name'] = '中国国际工程咨询有限公司'
         data['summary'] = ''
         data['content'] = soup.select('.bt_content')[0].text
         data['attachments'] = ''
@@ -209,7 +209,7 @@ def parse_ruc_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '中国人民大学国家发展与战略研究院'
-        data['thinkank_name'] = '中国人民大学国家发展与战略研究院'
+        data['thinktank_name'] = '中国人民大学国家发展与战略研究院'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -267,7 +267,7 @@ def parse_drc_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '国务院发展研究中心'
-        data['thinkank_name'] = '国务院发展研究中心'
+        data['thinktank_name'] = '国务院发展研究中心'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -327,7 +327,7 @@ def parse_cas_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '中国科学院'
-        data['thinkank_name'] = '中国科学院'
+        data['thinktank_name'] = '中国科学院'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -387,7 +387,7 @@ def parse_amr_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '中国宏观经济研究院'
-        data['thinkank_name'] = '中国宏观经济研究院'
+        data['thinktank_name'] = '中国宏观经济研究院'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -447,7 +447,7 @@ def parse_ccid_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = 'CCiD赛迪研究院'
-        data['thinkank_name'] = 'CCiD赛迪研究院'
+        data['thinktank_name'] = 'CCiD赛迪研究院'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -507,7 +507,7 @@ def parse_sass_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '上海社会科学院'
-        data['thinkank_name'] = '上海社会科学院'
+        data['thinktank_name'] = '上海社会科学院'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -553,7 +553,7 @@ def parse_cdi_article(soup, url, publish_date):
         data['url'] = url
         data['publish_date'] = publish_date
         data['authors'] = '综合开发研究院（中国·深圳）'
-        data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+        data['thinktank_name'] = '综合开发研究院（中国·深圳）'
         data['summary'] = ''
         data['content'] = content
         data['attachments'] = ''
@@ -635,7 +635,7 @@ def parse_rand_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': '兰德公司（RAND Corporation）',
-            'thinkank_name': '兰德公司（RAND Corporation）',
+            'thinktank_name': '兰德公司（RAND Corporation）',
             'summary': '',
             'content': content,
             'attachments': attach_str,
@@ -737,7 +737,7 @@ def parse_rand_article2(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': '兰德公司（RAND Corporation）',
-            'thinkank_name': '兰德公司（RAND Corporation）',
+            'thinktank_name': '兰德公司（RAND Corporation）',
             'summary': '',
             'content': content,
             'attachments': attach_str,
@@ -1085,7 +1085,7 @@ def parse_jpm_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '摩根大通研究院',
+            'thinktank_name': '摩根大通研究院',
             'summary': summary,
             'content': content,
             'attachments': attachments,
@@ -1107,7 +1107,7 @@ def parse_kpmg_article(soup, url, publish_date):
     - attachments: 若存在文档附件(\n    .pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx) 则只返回这些文件；
                    否则若有音/视频(.mp3/.m4a/.wav/.mp4/.m3u8/.mov/.m4v) 返回其 URL；
                    否则为空
-    - thinkank_name: 固定 "毕马威中国(KPMG)"
+    - thinktank_name: 固定 "毕马威中国(KPMG)"
     """
     try:
         # 标题
@@ -1323,7 +1323,7 @@ def parse_kpmg_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '毕马威中国(KPMG)',
+            'thinktank_name': '毕马威中国(KPMG)',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -1345,7 +1345,7 @@ def parse_mck_article(soup, url, publish_date):
     - attachments: 若存在文档附件(.pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx) 则只返回这些文件；
                    否则若有音/视频(.mp3/.m4a/.wav/.mp4/.m3u8/.mov/.m4v) 返回其 URL；
                    否则为空
-    - thinkank_name: 固定 "麦肯锡中国（McKinsey & Company）"
+    - thinktank_name: 固定 "麦肯锡中国（McKinsey & Company）"
     """
     try:
         # 标题：h1 > og:title
@@ -1531,7 +1531,7 @@ def parse_mck_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '麦肯锡中国（McKinsey & Company）',
+            'thinktank_name': '麦肯锡中国（McKinsey & Company）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -1553,7 +1553,7 @@ def parse_pwc_article(soup, url, publish_date):
     - attachments: 若存在文档类附件(.pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx) 则仅返回这些文件；
                    若无文档但有音/视频(.mp3/.m4a/.wav/.mp4/.m3u8/.mov/.m4v) 则返回其 URL；
                    若文件与音/视频并存，仅保留文件附件
-    - thinkank_name: 固定 "普华永道（PwC）"
+    - thinktank_name: 固定 "普华永道（PwC）"
     """
     try:
         # 标题
@@ -1838,7 +1838,7 @@ def parse_pwc_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '普华永道（PwC）',
+            'thinktank_name': '普华永道（PwC）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -1907,7 +1907,7 @@ def parse_wechat_article(soup, url, publish_date):
             'url': url,
             'publish_date': pub,
             'authors': '北京大学国家发展研究院',
-            'thinkank_name': '北京大学国家发展研究院',
+            'thinktank_name': '北京大学国家发展研究院',
             'summary': '',
             'content': content,
             'attachments': '',
@@ -1952,7 +1952,7 @@ def parse_nsd_article(soup, url, publish_date):
             'url': url,
             'publish_date': publish_date,
             'authors': '北京大学国家发展研究院',
-            'thinkank_name': '北京大学国家发展研究院',
+            'thinktank_name': '北京大学国家发展研究院',
             'summary': '',
             'content': content,
             'attachments': '',
@@ -2131,7 +2131,7 @@ def parse_bcg_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '波士顿咨询（BCG）',
+            'thinktank_name': '波士顿咨询（BCG）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -2151,7 +2151,7 @@ def parse_bain_article(soup: BeautifulSoup, url: str, publish_date: str):
     - 日期：优先 meta/time；缺失则使用列表页日期
     - 作者：尝试从 meta[name=author]、正文“作者信息”块提取作者姓名
     - 附件：优先文档（pdf/doc/xls/ppt 等）；若仅有音/视频则返回其 URL；并存时仅保留文档
-    - thinkank_name：统一填写为“贝恩咨询（Bain & Company）”
+    - thinktank_name：统一填写为“贝恩咨询（Bain & Company）”
     """
     try:
         # 标题
@@ -2272,7 +2272,7 @@ def parse_bain_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '贝恩咨询（Bain & Company）',
+            'thinktank_name': '贝恩咨询（Bain & Company）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -2457,7 +2457,7 @@ def parse_ey_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '安永中国（EY）',
+            'thinktank_name': '安永中国（EY）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -2644,7 +2644,7 @@ def parse_iiss_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '国际战略研究所(iiss)',
+            'thinktank_name': '国际战略研究所(iiss)',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -2664,7 +2664,7 @@ def parse_deloitte_article(soup: BeautifulSoup, url: str, publish_date: str):
     - 日期：优先 JSON-LD -> meta(article:published_time) -> time[datetime] -> 中文日期文本 -> 列表页日期
     - 作者：优先 JSON-LD author / meta[name=author] / 常见“作者/撰文/撰稿”文本
     - 附件：优先文档（pdf/doc/xls/ppt 等）；若无文档而存在音/视频则返回其 URL；并存时仅保留文档
-    - thinkank_name：统一为“德勤中国（Deloitte）”
+    - thinktank_name：统一为“德勤中国（Deloitte）”
     """
     try:
         # 标题
@@ -2847,7 +2847,7 @@ def parse_deloitte_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '德勤中国（Deloitte）',
+            'thinktank_name': '德勤中国（Deloitte）',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -2867,7 +2867,7 @@ def parse_iccs_article(soup: BeautifulSoup, url: str, publish_date: str):
     - 日期：尝试 time/meta/页面文本中的 YYYY-MM-DD/年-月-日
     - 作者：尽力从“作者/撰文/撰稿”等字段提取姓名；若无法可靠获取则留空
     - 附件：优先返回文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；并存时仅返回文档
-    - thinkank_name：统一填写为“清华大学国情研究院”
+    - thinktank_name：统一填写为“清华大学国情研究院”
     """
     try:
         # 标题
@@ -3004,7 +3004,7 @@ def parse_iccs_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '清华大学国情研究院',
+            'thinktank_name': '清华大学国情研究院',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -3024,7 +3024,7 @@ def parse_fudan_article(soup: BeautifulSoup, url: str, publish_date: str):
     - 日期：优先提取“发布日期/发布时间”或文本中的 YYYY-MM-DD / YYYY年MM月DD日；缺失则用列表页日期
     - 作者：尽力从“作者/撰文/撰稿/文/xxx”等字段提取；若无法可靠获取则留空
     - 附件：优先文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；并存时仅返回文档
-    - thinkank_name：统一填写为“复旦大学中国研究院”
+    - thinktank_name：统一填写为“复旦大学中国研究院”
     """
     try:
         # 标题
@@ -3166,7 +3166,7 @@ def parse_fudan_article(soup: BeautifulSoup, url: str, publish_date: str):
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '复旦大学中国研究院',
+            'thinktank_name': '复旦大学中国研究院',
             'summary': '',
             'content': content,
             'attachments': attachments,
@@ -3214,10 +3214,10 @@ def crawl_article_content(url, publish_date, headers, title_hint=None):
         data['publish_date'] = publish_date
         if 'cdi.com.cn' in lower_url:
             data['authors'] = '综合开发研究院（中国·深圳）'
-            data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+            data['thinktank_name'] = '综合开发研究院（中国·深圳）'
         else:
             data['authors'] = ''
-            data['thinkank_name'] = ''
+            data['thinktank_name'] = ''
         data['summary'] = ''
         data['content'] = ''
         data['attachments'] = url
@@ -3478,7 +3478,7 @@ def main(only_domain: str = '', force_domain: str = ''):
     OUTPUT_JSON_PATH = 'output_complete.json'
     existing_items, seen_urls = load_existing_results(OUTPUT_JSON_PATH)
     print(f"已载入历史条目 {len(existing_items)} 条，将跳过重复 URL")
-    # URL -> 索引映射（便于更新 thinkank_name）
+    # URL -> 索引映射（便于更新 thinktank_name）
     existing_map = {}
     for idx, rec in enumerate(existing_items):
         try:
@@ -3623,8 +3623,8 @@ def main(only_domain: str = '', force_domain: str = ''):
             if board_name and nu in existing_map:
                 try:
                     idx = existing_map[nu]
-                    if existing_items[idx].get('thinkank_name') != board_name:
-                        existing_items[idx]['thinkank_name'] = board_name
+                    if existing_items[idx].get('thinktank_name') != board_name:
+                        existing_items[idx]['thinktank_name'] = board_name
                         updated_existing = True
                 except Exception:
                     pass
@@ -3649,7 +3649,7 @@ def main(only_domain: str = '', force_domain: str = ''):
             data = crawl_article_content(url, publish_date, headers, title_hint=title_hint)
             if data:
                 if board_name:
-                    data['thinkank_name'] = board_name
+                    data['thinktank_name'] = board_name
                 lst.append(data)
                 print(f"成功: {data['title'][:60]}...")
             else:
