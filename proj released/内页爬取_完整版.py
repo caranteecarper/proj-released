@@ -1,68 +1,114 @@
-import json
-import re
-import time
-from datetime import datetime
-from urllib.parse import urljoin as url_join
-
-import requests
+﻿import json
 from bs4 import BeautifulSoup
+import requests
+from datetime import datetime
 from requests.exceptions import RequestException
+import time
+import re
+from urllib.parse import urljoin as url_join
 
 # 明确禁用系统代理，避免 HTTPS 站点走到失效代理
 NO_PROXIES = {"http": None, "https": None}
 
+# ------------------------------ RAND 专用文本工具 ------------------------------
+def _lines_filter_noise(lines):
+    """过滤明显的元信息/订阅/分享等噪声行。"""
+    patterns = [
+        r'^Subscribe\b', r'newsletter', r'^Share on ', r'@RANDCorporation', r'^For Media', r'^By\s+\w',
+        r'^Published\s+in:', r'^Published\s+on', r'Posted on rand\.org', r'^Photo by', r'^Copyright',
+        r'RAND\s+Education,?\s+Employment,?\s+and\s+Infrastructure', r'RAND\s+Europe',
+        r'^Cite this', r'^BibTeX$', r'^RIS$', r'^Email$', r'^LinkedIn$', r'^Facebook$', r'^Twitter$'
+    ]
+    res = []
+    for ln in lines:
+        s = (ln or '').strip()
+        if not s:
+            continue
+        bad = False
+        for pat in patterns:
+            if re.search(pat, s, re.I):
+                bad = True
+                break
+        if not bad:
+            res.append(s)
+    return res
 
-# ------------------------------ 通用工具 ------------------------------
-def get_current_date():
-    return datetime.now().date()
-
-
-def clean_text(text: str) -> str:
-    if not text:
+def _text_from_container(node):
+    """提取容器内 p/li 文本，拼接并去噪。"""
+    if node is None:
         return ''
-    return re.sub(r"\s+", " ", text.strip())
+    ps = []
+    for p in node.select('p, li'):
+        t = p.get_text(" ", strip=True)
+        if t:
+            ps.append(t)
+    ps = _lines_filter_noise(ps)
+    return clean_text("\n".join(ps))
 
+# ------------------------------ 通用工具函数与回退提取 ------------------------------
+
+def get_current_date():
+    """获取当前日期和时间"""
+    current_datetime = datetime.now()
+    current_date = current_datetime.date()
+    return current_date
+
+def clean_text(text):
+    """清理文本内容，去除多余空白字符"""
+    if text:
+        # 去除多余的空白字符，保留段落结构
+        text = re.sub(r'\s+', ' ', text.strip())
+        return text
+    return ''
 
 def generic_title_from_meta_or_h(soup: BeautifulSoup) -> str:
-    m = soup.select_one('meta[property="og:title"][content]') or soup.select_one('meta[name="title"][content]')
-    if m and m.get('content'):
-        return clean_text(m['content'])
-    for sel in ['h1', '.title h1', '.article-title h1', 'h2']:
-        n = soup.select_one(sel)
-        if n and n.get_text(strip=True):
-            return clean_text(n.get_text())
+    # meta 优先
+    meta_title = soup.select_one('meta[property="og:title"][content]') or soup.select_one('meta[name="title"][content]')
+    if meta_title and meta_title.get('content'):
+        return clean_text(meta_title['content'])
+    # h1/h2 次之
+    for sel in ['h1', '.title h1', '.article-title h1', '.arti_title', '.wp_article_title', 'h2']:
+        node = soup.select_one(sel)
+        if node and node.get_text(strip=True):
+            return clean_text(node.get_text())
+    # 最后用 <title>
     if soup.title and soup.title.string:
         return clean_text(soup.title.string)
     return ''
 
-
 def generic_content_by_candidates(soup: BeautifulSoup) -> str:
+    # 移除无关节点
     for tag in soup(['script', 'style', 'noscript']):
         tag.extract()
-    candidates = [
-        'article', '.article-content', '.content', '.text', '.cmp-text', '.rich-text', '#content'
+    # 常见正文容器优先
+    candidate_selectors = [
+        '.TRS_Editor', '.v_news_content', '.wp_articlecontent', '.article-content',
+        '.content', '.article', '.text', '.detail-content', '#content', '.read', '.articleText'
     ]
-    for sel in candidates:
+    for sel in candidate_selectors:
         node = soup.select_one(sel)
         if node and node.get_text(strip=True):
             return clean_text(node.get_text("\n"))
-    # 兜底：取文本量最大的块
+    # 兜底：选择文本量最大的块级元素
     max_text = ''
     max_len = 0
     for node in soup.find_all(['article', 'section', 'div']):
-        t = node.get_text("\n", strip=True)
-        if len(t) > max_len:
-            max_len = len(t)
-            max_text = t
+        text = node.get_text("\n", strip=True)
+        tlen = len(text)
+        if tlen > max_len:
+            max_len = tlen
+            max_text = text
     return clean_text(max_text)
 
-
+# ------------------------------ 去重与缓存工具函数 ------------------------------
 def normalize_url(u: str) -> str:
+    """对 URL 做轻量规范化：去首尾空格，scheme/host 小写，去掉 fragment。"""
     try:
         from urllib.parse import urlparse, urlunparse
         u = (u or '').strip()
         parts = urlparse(u)
         if not parts.scheme:
+            # 对于相对地址或空值，原样返回（上游基本已做绝对化）
             return u
         norm = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), fragment='')
         return urlunparse(norm)
@@ -71,6 +117,12 @@ def normalize_url(u: str) -> str:
 
 
 def load_existing_results(json_path: str):
+    """
+    加载已有的抓取结果，返回 (items_list, seen_url_set)。
+    - items_list: List[dict]
+    - seen_url_set: Set[str]，保存规范化后的 URL，用于跳过已抓取内容
+    读取失败时返回空列表与空集合。
+    """
     items = []
     seen = set()
     try:
@@ -79,790 +131,756 @@ def load_existing_results(json_path: str):
             if isinstance(data, list):
                 items = data
                 for it in data:
-                    u = normalize_url(it.get('url', ''))
-                    if u:
-                        seen.add(u)
+                    try:
+                        u = normalize_url(it.get('url', ''))
+                        if u:
+                            seen.add(u)
+                    except Exception:
+                        continue
     except Exception:
+        # 无已有文件或解析失败，忽略
         pass
     return items, seen
 
-
-# ------------------------------ 站点解析：BCG ------------------------------
-def parse_bcg_article(soup: BeautifulSoup, url: str, publish_date: str):
+def parse_ciecc_article(soup, url, publish_date):
+    """解析中国国际工程咨询有限公司的文章"""
     try:
-        # 标题
-        title = ''
-        tnode = soup.select_one('h1') or soup.select_one('.article-title h1') or soup.select_one('.title h1')
-        if tnode and tnode.get_text(strip=True):
-            title = clean_text(tnode.get_text())
-        if not title:
-            title = generic_title_from_meta_or_h(soup)
-
-        # 正文
-        def _first_nonempty_text(nodes):
-            for n in nodes or []:
-                t = n.get_text("\n", strip=True)
-                if t:
-                    return clean_text(t)
-            return ''
-
-        main_scope = soup.select_one('main') or soup
-        article_scope = main_scope.select_one('article') or main_scope
-        candidates = []
-        for css in [
-            'article .rich-text', 'article .text', 'article .article-content', 'article .cmp-text',
-            'div.rich-text', 'div.article-content', 'div.cmp-text', 'section.cmp-text', 'section.text',
-        ]:
-            candidates.extend(article_scope.select(css))
-        if not candidates:
-            candidates = [article_scope]
-        content = _first_nonempty_text(candidates)
-        if not content:
-            content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        try:
-            import json as _json
-            def _find_date(obj):
-                if isinstance(obj, dict):
-                    for k in ['datePublished', 'dateCreated', 'dateModified']:
-                        v = obj.get(k)
-                        if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
-                            return v
-                    for v in obj.values():
-                        r = _find_date(v)
-                        if r:
-                            return r
-                elif isinstance(obj, list):
-                    for it in obj:
-                        r = _find_date(it)
-                        if r:
-                            return r
-                return ''
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                d = _find_date(data)
-                if d:
-                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
-                    if m:
-                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                        break
-        except Exception:
-            pass
-        if not pub:
-            meta_time = soup.select_one('meta[property="article:published_time"][content]')
-            if meta_time and meta_time.get('content'):
-                mt = meta_time['content']
-                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
-                if m2:
-                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
-        if not pub:
-            t = soup.select_one('time[datetime]')
-            if t and t.get('datetime'):
-                m3 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', t.get('datetime'))
-                if m3:
-                    pub = f"{int(m3.group(1)):04d}-{int(m3.group(2)):02d}-{int(m3.group(3)):02d}"
-        if not pub:
-            pub = publish_date or ''
-
-        # 作者
-        authors = ''
-        try:
-            import json as _json
-            names = []
-            def _add(x):
-                if isinstance(x, str) and x.strip():
-                    names.append(clean_text(x))
-                elif isinstance(x, dict):
-                    n = x.get('name') or x.get('author') or x.get('creator')
-                    if isinstance(n, str) and n.strip():
-                        names.append(clean_text(n))
-                    elif isinstance(n, list):
-                        for e in n:
-                            _add(e)
-                elif isinstance(x, list):
-                    for e in x:
-                        _add(e)
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                if isinstance(data, dict) and 'author' in data:
-                    _add(data.get('author'))
-                elif isinstance(data, list):
-                    for obj in data:
-                        if isinstance(obj, dict) and 'author' in obj:
-                            _add(obj.get('author'))
-            if not names:
-                meta_author = soup.select_one('meta[name="author"][content]')
-                if meta_author and meta_author.get('content'):
-                    names.append(clean_text(meta_author['content']))
-            if not names:
-                for sel in ['[class*="author" i]', 'a[href*="/people" i]', 'a[href*="/experts" i]']:
-                    node = soup.select_one(sel)
-                    if node and node.get_text(strip=True):
-                        names.append(clean_text(node.get_text()))
-                        break
-            if names:
-                seen = set(); uniq = []
-                for n in names:
-                    if n and n not in seen:
-                        seen.add(n); uniq.append(n)
-                authors = '、'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件：优先文档，其次音/视频
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = u.lower(); full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-        scope = article_scope or soup
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url], button[data-asset], button[data-href], button[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
-        if not title or not content:
-            print(f"BCG 文章解析失败：标题或正文为空: {url}")
-            return None
-        return {
-            'title': title,
-            'url': url,
-            'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '波士顿咨询（BCG）',
-            'summary': '',
-            'content': content,
-            'attachments': attachments,
-            'crawl_date': get_current_date()
-        }
-    except Exception as e:
-        print(f"解析 BCG 页面失败: {url} 错误: {e}")
+        data = {}
+        data['title'] = soup.select('.comnewsl.fl tr')[0].text.strip()
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '中国国际工程咨询有限公司（智库建议）'
+        data['thinkank_name'] = '中国国际工程咨询有限公司'
+        data['summary'] = ''
+        data['content'] = soup.select('.bt_content')[0].text
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except (IndexError, AttributeError) as e:
+        print(f"解析中国国际工程咨询有限公司页面 {url} 失败: {e}")
         return None
 
-
-def parse_bain_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    解析贝恩咨询（bain.cn）文章页：
-    - 标题：优先 detail-content > .content-title h3；兜底 h1 / meta og:title / <title>
-    - 正文：优先 detail-content > .content 段落文本；若抓空再回退通用提取
-    - 日期：优先 meta/time；缺失则使用列表页日期
-    - 作者：尝试从 meta[name=author]、正文“作者信息”块提取作者姓名
-    - 附件：优先文档（pdf/doc/xls/ppt 等）；若仅有音/视频则返回其 URL；并存时仅保留文档
-    - thinkank_name：统一填写为“贝恩咨询（Bain & Company）”
-    """
+def parse_ruc_article(soup, url, publish_date):
+    """解析中国人民大学国家发展与战略研究院的文章"""
     try:
-        # 标题
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            'h1.title',
+            '.article-title h1',
+            '.content-title h1',
+            'h1',
+            '.title'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content-text',
+            '.article-text',
+            '.content',
+            '.text'
+        ]
+        
+        # 获取标题
         title = ''
-        t = soup.select_one('div.detail-content .content-title h3') or soup.select_one('h1')
-        if t and t.get_text(strip=True):
-            title = clean_text(t.get_text())
-        if not title:
-            title = generic_title_from_meta_or_h(soup)
-
-        # 正文：尽量按段落拼接，避免空段落与冗余样式干扰
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
         content = ''
-        main_scope = soup.select_one('div.detail-content') or soup
-        body = main_scope.select_one('div.content') or main_scope
-        if body is not None:
-            paras = []
-            for node in body.select('p, li, h2, h3, h4'):
-                txt = (node.get_text('\n', strip=True) or '').strip()
-                # 跳过纯空/仅符号段落
-                if not txt or len(txt.replace('\u3000', '').replace('\xa0', '').strip()) == 0:
-                    continue
-                paras.append(clean_text(txt))
-            if not paras:
-                # 兜底：直接取整个 body 文本
-                bulk = body.get_text('\n', strip=True)
-                if bulk:
-                    content = clean_text(bulk)
-            else:
-                content = ' '.join(paras)
-        if not content:
-            content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        try:
-            mt = soup.select_one('meta[property="article:published_time"][content]')
-            if mt and mt.get('content'):
-                m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt['content'])
-                if m:
-                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-            if not pub:
-                tnode = soup.select_one('time[datetime]')
-                if tnode and tnode.get('datetime'):
-                    m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', tnode['datetime'])
-                    if m2:
-                        pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
-        except Exception:
-            pass
-        if not pub:
-            pub = publish_date or ''
-
-        # 作者（可检测到则填写）
-        authors = ''
-        try:
-            # meta 优先
-            meta_author = soup.select_one('meta[name="author"][content]')
-            if meta_author and meta_author.get('content'):
-                authors = clean_text(meta_author['content'])
-            if not authors:
-                # 正文“作者信息”：定位包含“作者信息”的段落，收集其后的若干非空行
-                scope = main_scope
-                ps = scope.select('div.content p') or scope.select('p')
-                idx = -1
-                for i, p in enumerate(ps):
-                    t0 = p.get_text(strip=True)
-                    if t0 and ('作者信息' in t0 or '作者' in t0):
-                        idx = i
-                        break
-                names = []
-                if idx >= 0:
-                    for j in range(idx + 1, min(idx + 6, len(ps))):  # 向后取最多 5 段
-                        txt = (ps[j].get_text(' ', strip=True) or '').strip()
-                        if not txt:
-                            break
-                        # 截断头尾标点/空字符
-                        names.append(clean_text(txt))
-                if names:
-                    # 仅保留前两行作者简介中的姓名（逗号/顿号/空格分隔，取每行第一段）
-                    extra = []
-                    for line in names[:3]:
-                        head = re.split(r'[，,\s]', line, maxsplit=1)[0]
-                        if head:
-                            extra.append(head)
-                    if extra:
-                        # 去重
-                        seen=set(); uniq=[]
-                        for n in extra:
-                            if n and n not in seen:
-                                seen.add(n); uniq.append(n)
-                        authors = '；'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower(); full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-
-        scope = main_scope
-        for a in scope.select('a[href], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
-        if not title or not content:
-            print(f"BAIN 文章解析失败：标题或正文为空: {url}")
-            return None
-        return {
-            'title': title,
-            'url': url,
-            'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '贝恩咨询（Bain & Company）',
-            'summary': '',
-            'content': content,
-            'attachments': attachments,
-            'crawl_date': get_current_date()
-        }
-    except Exception as e:
-        print(f"解析 BAIN 页面失败: {url} 错误: {e}")
-        return None
-
-
-# ------------------------------ 站点解析：EY China ------------------------------
-def parse_ey_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    解析安永中国（ey.com）文章页
-    - 标题：优先 h1 / meta og:title / <title>
-    - 正文：优先 main/article 内 cmp-text/rich-text 等；回退通用文本提取
-    - 日期：优先 JSON-LD 的 datePublished / meta[property=article:published_time] / <time datetime>
-    - 作者：优先 JSON-LD author / meta[name=author] / 含 author 文本或 /people/ 链接
-    - 附件：优先文档（pdf/doc/xls/ppt 等），若无文档而存在音频/视频则返回其 URL；并存时仅保留文档
-    """
-    try:
-        # 标题
-        title = ''
-        t = soup.select_one('h1')
-        if t and t.get_text(strip=True):
-            title = clean_text(t.get_text())
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
         if not title:
             title = generic_title_from_meta_or_h(soup)
-
-        # 正文
-        def _first_nonempty_text(nodes):
-            for n in nodes or []:
-                txt = n.get_text("\n", strip=True)
-                if txt:
-                    return clean_text(txt)
-            return ''
-
-        main_scope = soup.select_one('main') or soup
-        article_scope = main_scope.select_one('article') or main_scope
-        candidates = []
-        for css in [
-            'article .cmp-text', 'article .rich-text', 'article .text', 'article .article-content',
-            'div.cmp-text', 'section.cmp-text', 'div.rich-text', 'div.article-content', 'section.text'
-        ]:
-            candidates.extend(article_scope.select(css))
-        if not candidates:
-            candidates = [article_scope]
-        content = _first_nonempty_text(candidates)
         if not content:
             content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        try:
-            import json as _json
-            def _find_date(obj):
-                if isinstance(obj, dict):
-                    for k in ['datePublished', 'dateCreated', 'dateModified']:
-                        v = obj.get(k)
-                        if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
-                            return v
-                    for v in obj.values():
-                        r = _find_date(v)
-                        if r:
-                            return r
-                elif isinstance(obj, list):
-                    for it in obj:
-                        r = _find_date(it)
-                        if r:
-                            return r
-                return ''
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                d = _find_date(data)
-                if d:
-                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
-                    if m:
-                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                        break
-        except Exception:
-            pass
-        if not pub:
-            mt = soup.select_one('meta[property="article:published_time"][content]')
-            if mt and mt.get('content'):
-                m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt['content'])
-                if m:
-                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        if not pub:
-            tnode = soup.select_one('time[datetime]')
-            if tnode and tnode.get('datetime'):
-                m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', tnode['datetime'])
-                if m:
-                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        if not pub:
-            pub = publish_date or ''
-
-        # 作者
-        authors = ''
-        try:
-            import json as _json
-            names = []
-            def _add(x):
-                if isinstance(x, str) and x.strip():
-                    names.append(clean_text(x))
-                elif isinstance(x, dict):
-                    n = x.get('name') or x.get('author') or x.get('creator')
-                    if isinstance(n, str) and n.strip():
-                        names.append(clean_text(n))
-                    elif isinstance(n, list):
-                        for e in n:
-                            _add(e)
-                elif isinstance(x, list):
-                    for e in x:
-                        _add(e)
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                if isinstance(data, dict) and 'author' in data:
-                    _add(data.get('author'))
-                elif isinstance(data, list):
-                    for obj in data:
-                        if isinstance(obj, dict) and 'author' in obj:
-                            _add(obj.get('author'))
-            if not names:
-                meta_author = soup.select_one('meta[name="author"][content]')
-                if meta_author and meta_author.get('content'):
-                    names.append(clean_text(meta_author['content']))
-            if not names:
-                for sel in ['[class*="author" i]', 'a[rel="author"]', 'a[href*="/people/" i]']:
-                    node = soup.select_one(sel)
-                    if node and node.get_text(strip=True):
-                        names.append(clean_text(node.get_text()))
-                        break
-            if names:
-                seen = set(); uniq = []
-                for n in names:
-                    if n and n not in seen:
-                        seen.add(n); uniq.append(n)
-                authors = '、'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower(); full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-        scope = article_scope or soup
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
         if not title or not content:
-            print(f"EY 文章解析失败：标题或正文为空: {url}")
+            print(f"中国人民大学文章解析失败，标题或内容为空: {url}")
             return None
-        return {
-            'title': title,
-            'url': url,
-            'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '安永中国（EY）',
-            'summary': '',
-            'content': content,
-            'attachments': attachments,
-            'crawl_date': get_current_date()
-        }
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '中国人民大学国家发展与战略研究院'
+        data['thinkank_name'] = '中国人民大学国家发展与战略研究院'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
     except Exception as e:
-        print(f"解析 EY 页面失败: {url} 错误: {e}")
+        print(f"解析中国人民大学页面 {url} 失败: {e}")
         return None
 
-def parse_iiss_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    IISS Online Analysis article parser (iiss.org)
-    - Title: prefer h1 / og:title / <title>
-    - Content: attempt common article containers, then fallback to generic text extraction
-    - Publish date: try JSON-LD -> meta(article:published_time) -> time[datetime] -> list date
-    - Authors: try JSON-LD author(s), meta[name=author], or common author selectors/people links
-    - Attachments: prefer document files (pdf/doc/xls/ppt), otherwise audio/video links if present
-    """
+def parse_drc_article(soup, url, publish_date):
+    """解析国务院发展研究中心的文章"""
     try:
-        # 标题
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            '.article-title',
+            '.title',
+            'h1',
+            '.headline'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content',
+            '.text',
+            '.article-text',
+            '.main-content'
+        ]
+        
+        # 获取标题
         title = ''
-        tnode = soup.select_one('h1') or soup.select_one('.article-title h1') or soup.select_one('.title h1')
-        if tnode and tnode.get_text(strip=True):
-            title = clean_text(tnode.get_text())
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
+        content = ''
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
         if not title:
             title = generic_title_from_meta_or_h(soup)
-
-        # 正文
-        def _first_nonempty_text(nodes):
-            for n in nodes or []:
-                t = n.get_text("\n", strip=True)
-                if t:
-                    return clean_text(t)
-            return ''
-
-        main_scope = soup.select_one('main') or soup
-        article_scope = main_scope.select_one('article') or main_scope
-        candidates = []
-        for css in [
-            'article .rich-text', 'article .text', 'article .article-content', 'article .cmp-text',
-            'div.rich-text', 'div.article-content', 'div.cmp-text', 'section.cmp-text', 'section.text',
-        ]:
-            candidates.extend(article_scope.select(css))
-        if not candidates:
-            candidates = [article_scope]
-        content = _first_nonempty_text(candidates)
         if not content:
             content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        try:
-            import json as _json
-            def _find_date(obj):
-                if isinstance(obj, dict):
-                    for k in ['datePublished', 'dateCreated', 'dateModified']:
-                        v = obj.get(k)
-                        if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
-                            return v
-                    for v in obj.values():
-                        r = _find_date(v)
-                        if r:
-                            return r
-                elif isinstance(obj, list):
-                    for it in obj:
-                        r = _find_date(it)
-                        if r:
-                            return r
-                return ''
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                d = _find_date(data)
-                if d:
-                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
-                    if m:
-                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                        break
-        except Exception:
-            pass
-        if not pub:
-            meta_time = soup.select_one('meta[property="article:published_time"][content]')
-            if meta_time and meta_time.get('content'):
-                mt = meta_time['content']
-                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
-                if m2:
-                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
-        if not pub:
-            t = soup.select_one('time[datetime]')
-            if t and t.get('datetime'):
-                m3 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', t.get('datetime'))
-                if m3:
-                    pub = f"{int(m3.group(1)):04d}-{int(m3.group(2)):02d}-{int(m3.group(3)):02d}"
-        if not pub:
-            pub = publish_date or ''
-
-        # 作者
-        authors = ''
-        try:
-            import json as _json
-            names = []
-            def _add(x):
-                if isinstance(x, str) and x.strip():
-                    names.append(clean_text(x))
-                elif isinstance(x, dict):
-                    n = x.get('name') or x.get('author') or x.get('creator')
-                    if isinstance(n, str) and n.strip():
-                        names.append(clean_text(n))
-                    elif isinstance(n, list):
-                        for e in n:
-                            _add(e)
-                elif isinstance(x, list):
-                    for e in x:
-                        _add(e)
-            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
-                txt = sc.string or sc.get_text() or ''
-                if not txt.strip():
-                    continue
-                try:
-                    data = _json.loads(txt)
-                except Exception:
-                    continue
-                if isinstance(data, dict) and 'author' in data:
-                    _add(data.get('author'))
-                elif isinstance(data, list):
-                    for obj in data:
-                        if isinstance(obj, dict) and 'author' in obj:
-                            _add(obj.get('author'))
-            if not names:
-                meta_author = soup.select_one('meta[name="author"][content]')
-                if meta_author and meta_author.get('content'):
-                    names.append(clean_text(meta_author['content']))
-            if not names:
-                for sel in ['[class*="author" i]', 'a[rel="author"]', 'a[href*="/people/" i]']:
-                    node = soup.select_one(sel)
-                    if node and node.get_text(strip=True):
-                        names.append(clean_text(node.get_text()))
-                        break
-            if names:
-                seen = set(); uniq = []
-                for n in names:
-                    if n and n not in seen:
-                        seen.add(n); uniq.append(n)
-                authors = '、'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件（优先文档；否则音/视频）
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower(); full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-        scope = (soup.select_one('article') or soup)
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
         if not title or not content:
-            print(f"IISS 文章解析失败，标题或正文为空: {url}")
+            print(f"国务院发展研究中心文章解析失败，标题或内容为空: {url}")
             return None
-        return {
-            'title': title,
-            'url': url,
-            'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '国际战略研究所(iiss)',
-            'summary': '',
-            'content': content,
-            'attachments': attachments,
-            'crawl_date': get_current_date()
-        }
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '国务院发展研究中心'
+        data['thinkank_name'] = '国务院发展研究中心'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
     except Exception as e:
-        print(f"解析 IISS 页面失败: {url} 原因: {e}")
+        print(f"解析国务院发展研究中心页面 {url} 失败: {e}")
         return None
 
-# ------------------------------ 站点解析：Deloitte China ------------------------------
-def parse_deloitte_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    解析德勤中国（deloitte.com）月度经济概览详情页
-    - 标题：优先 h1/cmp-title__text/og:title/<title>
-    - 正文：优先 main/article 内的 cmp-text/rich-text/text；回退到通用文本提取
-    - 日期：优先 JSON-LD -> meta(article:published_time) -> time[datetime] -> 中文日期文本 -> 列表页日期
-    - 作者：优先 JSON-LD author / meta[name=author] / 常见“作者/撰文/撰稿”文本
-    - 附件：优先文档（pdf/doc/xls/ppt 等）；若无文档而存在音/视频则返回其 URL；并存时仅保留文档
-    - thinkank_name：统一为“德勤中国（Deloitte）”
+def parse_cas_article(soup, url, publish_date):
+    """解析中国科学院的文章"""
+    try:
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            '.article-title',
+            '.title',
+            'h1',
+            '.headline',
+            '.news-title'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content',
+            '.text',
+            '.article-text',
+            '.news-content',
+            '.main-content'
+        ]
+        
+        # 获取标题
+        title = ''
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
+        content = ''
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"中国科学院文章解析失败，标题或内容为空: {url}")
+            return None
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '中国科学院'
+        data['thinkank_name'] = '中国科学院'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析中国科学院页面 {url} 失败: {e}")
+        return None
+
+def parse_amr_article(soup, url, publish_date):
+    """解析中国宏观经济研究院的文章"""
+    try:
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            '.article-title',
+            '.title',
+            'h1',
+            '.headline',
+            '.news-title'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content',
+            '.text',
+            '.article-text',
+            '.news-content',
+            '.main-content'
+        ]
+        
+        # 获取标题
+        title = ''
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
+        content = ''
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"中国宏观经济研究院文章解析失败，标题或内容为空: {url}")
+            return None
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '中国宏观经济研究院'
+        data['thinkank_name'] = '中国宏观经济研究院'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析中国宏观经济研究院页面 {url} 失败: {e}")
+        return None
+
+def parse_ccid_article(soup, url, publish_date):
+    """解析CCiD赛迪研究院的文章"""
+    try:
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            '.article-title',
+            '.title',
+            'h1',
+            '.headline',
+            '.news-title'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content',
+            '.text',
+            '.article-text',
+            '.news-content',
+            '.main-content'
+        ]
+        
+        # 获取标题
+        title = ''
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
+        content = ''
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"CCiD赛迪研究院文章解析失败，标题或内容为空: {url}")
+            return None
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = 'CCiD赛迪研究院'
+        data['thinkank_name'] = 'CCiD赛迪研究院'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析CCiD赛迪研究院页面 {url} 失败: {e}")
+        return None
+
+def parse_sass_article(soup, url, publish_date):
+    """解析上海社会科学院的文章"""
+    try:
+        data = {}
+        # 尝试多种可能的选择器
+        title_selectors = [
+            '.article-title',
+            '.title',
+            'h1',
+            '.headline',
+            '.news-title'
+        ]
+        
+        content_selectors = [
+            '.article-content',
+            '.content',
+            '.text',
+            '.article-text',
+            '.news-content',
+            '.main-content'
+        ]
+        
+        # 获取标题
+        title = ''
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+                break
+        
+        # 获取内容
+        content = ''
+        for selector in content_selectors:
+            content_elem = soup.select_one(selector)
+            if content_elem:
+                content = clean_text(content_elem.get_text())
+                break
+        
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"上海社会科学院文章解析失败，标题或内容为空: {url}")
+            return None
+            
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '上海社会科学院'
+        data['thinkank_name'] = '上海社会科学院'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析上海社会科学院页面 {url} 失败: {e}")
+        return None
+
+def parse_cdi_article(soup, url, publish_date):
+    """解析综合开发研究院（中国·深圳）的文章"""
+    try:
+        data = {}
+        title_selectors = [
+            'div.head h1',
+            'h1',
+            '.article-title',
+            '.title'
+        ]
+        content_selectors = [
+            '#info', 'div#info', '.article-content', '.content', '#content', '.text'
+        ]
+        title = ''
+        for selector in title_selectors:
+            node = soup.select_one(selector)
+            if node and node.get_text(strip=True):
+                title = clean_text(node.get_text())
+                break
+        content = ''
+        for selector in content_selectors:
+            node = soup.select_one(selector)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                break
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"综合开发研究院文章解析失败，标题或内容为空: {url}")
+            return None
+        data['title'] = title
+        data['url'] = url
+        data['publish_date'] = publish_date
+        data['authors'] = '综合开发研究院（中国·深圳）'
+        data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+        data['summary'] = ''
+        data['content'] = content
+        data['attachments'] = ''
+        data['crawl_date'] = get_current_date()
+        return data
+    except Exception as e:
+        print(f"解析综合开发研究院页面 {url} 失败: {e}")
+        return None
+
+def parse_rand_article(soup, url, publish_date):
+    """解析 RAND 文章页。
+    - 标题优先 h1#RANDTitleHeadingId / article h1 / meta og:title
+    - 正文优先 <article>，否则退化到通用正文提取
+    - 日期优先 JSON-LD 的 datePublished，再退化到传入 publish_date
+    - 附件提取页面内的 PDF/DOC/XLS 等链接
     """
     try:
         # 标题
         title = ''
-        t = (
-            soup.select_one('h1.cmp-title__text') or
+        title_node = (
+            soup.select_one('h1#RANDTitleHeadingId') or
+            soup.select_one('article h1') or
+            soup.select_one('div.head h1') or
             soup.select_one('h1')
         )
-        if t and t.get_text(strip=True):
-            title = clean_text(t.get_text())
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
         if not title:
-            title = generic_title_from_meta_or_h(soup)
+            meta_title = soup.select_one('meta[property="og:title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
 
         # 正文
-        def _first_nonempty_text(nodes):
-            for n in nodes or []:
-                txt = n.get_text("\n", strip=True)
-                if txt:
-                    return clean_text(txt)
-            return ''
+        content = ''
+        art = soup.select_one('article')
+        if art and art.get_text(strip=True):
+            content = clean_text(art.get_text("\n"))
+        if not content:
+            content = generic_content_by_candidates(soup)
 
-        main_scope = soup.select_one('main') or soup
-        article_scope = main_scope.select_one('article') or main_scope
-        candidates = []
-        for css in [
-            'article .cmp-text', 'article .rich-text', 'article .text', 'article .article-content',
-            'div.cmp-text', 'section.cmp-text', 'div.rich-text', 'div.article-content', 'section.text'
+        # 日期：JSON-LD datePublished -> YYYY-MM-DD
+        pub = ''
+        try:
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{1,2})-(\d{1,2})"', txt)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        except Exception:
+            pass
+        if not pub:
+            # 备选 meta
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
+
+        # 附件（同域绝对化）
+        attachments = []
+        container = art or soup
+        for a in container.select('a[href]'):
+            href = a.get('href', '')
+            lower = href.lower()
+            if any(lower.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                attachments.append(url_join(url, href))
+        attach_str = ' ; '.join(attachments)
+
+        if not title or not content:
+            print(f"RAND 文章解析失败（标题或正文为空）: {url}")
+            return None
+
+        data = {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': '兰德公司（RAND Corporation）',
+            'thinkank_name': '兰德公司（RAND Corporation）',
+            'summary': '',
+            'content': content,
+            'attachments': attach_str,
+            'crawl_date': get_current_date()
+        }
+        return data
+    except Exception as e:
+        print(f"解析 RAND 页面失败: {url} 错误: {e}")
+        return None
+
+def parse_rand_article2(soup, url, publish_date):
+    """改进版：优先抽取 RAND 出版物摘要，过滤订阅/分享等噪声，兜底 meta 摘要。"""
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('h1#RANDTitleHeadingId') or
+            soup.select_one('article h1') or
+            soup.select_one('div.head h1') or
+            soup.select_one('h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 正文/摘要
+        content = ''
+        art = None
+        for sel in [
+            'div.product-main div.abstract.product-page-abstract',
+            'div.product-main div.abstract',
+            'section.abstract',
+            'div#abstract',
+            'div.abstract-first-letter',
         ]:
-            candidates.extend(article_scope.select(css))
-        if not candidates:
-            candidates = [article_scope]
-        content = _first_nonempty_text(candidates)
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = _text_from_container(node)
+                if content:
+                    break
+        if not content:
+            art = soup.select_one('article.blog') or soup.select_one('article')
+            if art and art.get_text(strip=True):
+                content = _text_from_container(art)
+        if not content:
+            trn = soup.select_one('#transcript, div.transcript, section.transcript')
+            if trn and trn.get_text(strip=True):
+                content = _text_from_container(trn)
+        if not content:
+            meta_abs = soup.select_one('meta[name="citation_abstract"][content]')
+            if meta_abs and meta_abs.get('content'):
+                content = clean_text(meta_abs['content'])
+        if not content:
+            meta_desc = soup.select_one('meta[property="og:description"][content]') or soup.select_one('meta[name="description"][content]')
+            if meta_desc and meta_desc.get('content'):
+                content = clean_text(meta_desc['content'])
         if not content:
             content = generic_content_by_candidates(soup)
 
         # 日期
-        def _cn_date_to_iso(s: str) -> str:
-            if not isinstance(s, str):
-                return ''
-            m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', s or '')
-            if m:
-                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-            m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s or '')
-            if m:
-                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-            return ''
+        pub = ''
+        try:
+            for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                txt = sc.string or sc.get_text() or ''
+                m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{1,2})-(\d{1,2})"', txt)
+                if m:
+                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+        except Exception:
+            pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
 
+        # 附件
+        attachments = []
+        container = art or soup
+        for a in container.select('a[href]'):
+            href = a.get('href', '')
+            lower = href.lower()
+            if any(lower.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                attachments.append(url_join(url, href))
+        attach_str = ' ; '.join(attachments)
+
+        if not title or not content:
+            print(f"RAND 文章解析失败：正文为空: {url}")
+            return None
+        return {
+            'title': title,
+            'url': url,
+            'publish_date': pub,
+            'authors': '兰德公司（RAND Corporation）',
+            'thinkank_name': '兰德公司（RAND Corporation）',
+            'summary': '',
+            'content': content,
+            'attachments': attach_str,
+            'crawl_date': get_current_date()
+        }
+    except Exception as e:
+        print(f"解析 RAND 页面失败: {url} 错误: {e}")
+        return None
+
+def parse_jpm_article(soup, url, publish_date):
+    """解析 摩根大通研究院 JPMorgan Insights 详情页
+    - 标题：优先 h1 / meta og:title
+    - 摘要与正文分离：
+        1) 先在 article 中按阅读顺序收集 h2/h3/p/li
+        2) 若存在标题为 "Overview" 的小节，则该小节（至下一小节前）的段落作为 summary；其后作为 content
+        3) 否则，取首段起连续 2~3 个段落为 summary；从第一个 h2/h3 起直至文末为 content
+        4) 若 summary 为空，则用 meta 描述兜底；content 若过短再回退通用正文提取
+    - 日期：JSON-LD datePublished > meta article:published_time > <time>
+    - 作者：JSON-LD author / meta[name=author] / 页面作者节点
+    - 附件：优先文档（pdf/doc/xls/ppt），若无则回退音视频（audio/video/iframe/m3u8/mp3 等）
+    """
+    try:
+        # 标题
+        title = ''
+        title_node = (
+            soup.select_one('h1') or
+            soup.select_one('.article-title h1') or
+            soup.select_one('.article-title') or
+            soup.select_one('.title h1')
+        )
+        if title_node and title_node.get_text(strip=True):
+            title = clean_text(title_node.get_text())
+        if not title:
+            meta_title = soup.select_one('meta[property="og:title"][content]') or soup.select_one('meta[name="title"][content]')
+            if meta_title and meta_title.get('content'):
+                title = clean_text(meta_title['content'])
+
+        # 摘要 + 正文（按结构切分）
+        def _collect_nodes(root):
+            nodes = []
+            if not root:
+                return nodes
+            for n in root.select('h2, h3, p, li'):
+                t = clean_text(n.get_text(" "))
+                if not t:
+                    continue
+                # 简单去噪
+                bad = False
+                for pat in [
+                    r'^Share\b', r'^Subscribe\b', r'^Related ', r'^For media', r'^Media Contacts',
+                    r'^Disclaimer', r'^Cite this', r'^References$', r'^Footnotes$', r'^Copyright'
+                ]:
+                    if re.search(pat, t, re.I):
+                        bad = True
+                        break
+                if not bad:
+                    nodes.append((n.name.lower(), t))
+            return nodes
+
+        article_root = soup.select_one('main article') or soup.select_one('article')
+        nodes = _collect_nodes(article_root)
+
+        def _split_summary_content(nodes):
+            if not nodes:
+                return '', ''
+            # 找到第一个 h2/h3
+            first_h_idx = -1
+            for i, (tag, txt) in enumerate(nodes):
+                if tag in ('h2', 'h3'):
+                    first_h_idx = i
+                    break
+            # 查找 Overview 小节
+            ov_idx = -1
+            for i, (tag, txt) in enumerate(nodes):
+                if tag in ('h2', 'h3') and re.search(r'\boverview\b', txt, re.I):
+                    ov_idx = i
+                    break
+            summary_parts = []
+            content_parts = []
+            if ov_idx != -1:
+                # 摘要：Overview 之后直到下一个小节前的 p/li
+                j = ov_idx + 1
+                while j < len(nodes) and nodes[j][0] not in ('h2', 'h3'):
+                    if nodes[j][0] in ('p', 'li'):
+                        summary_parts.append(nodes[j][1])
+                    j += 1
+                # 正文：从 j 起至文末
+                for k in range(j, len(nodes)):
+                    tag, txt = nodes[k]
+                    if tag in ('h2', 'h3'):
+                        content_parts.append(txt)
+                    elif tag in ('p', 'li'):
+                        content_parts.append(txt)
+            else:
+                # 首段起连续 2~3 个段落为摘要（不跨小节）
+                i = 0
+                added = 0
+                while i < len(nodes) and nodes[i][0] not in ('h2', 'h3'):
+                    if nodes[i][0] in ('p', 'li'):
+                        summary_parts.append(nodes[i][1])
+                        added += 1
+                        if added >= 3:
+                            break
+                    i += 1
+                # 正文：从第一个小节开始（如存在），否则从剩余段落开始
+                start = first_h_idx if first_h_idx != -1 else i + 1
+                for k in range(max(0, start), len(nodes)):
+                    tag, txt = nodes[k]
+                    if tag in ('h2', 'h3'):
+                        content_parts.append(txt)
+                    elif tag in ('p', 'li'):
+                        content_parts.append(txt)
+            return clean_text('\n'.join(summary_parts)), clean_text('\n'.join(content_parts))
+
+        summary, content = _split_summary_content(nodes)
+        if not summary:
+            meta_desc = soup.select_one('meta[property="og:description"][content]') or soup.select_one('meta[name="description"][content]')
+            if meta_desc and meta_desc.get('content'):
+                summary = clean_text(meta_desc['content'])
+        if not content:
+            # 回退：聚合多个文本容器
+            content = ''
+            for sel in ['article .cmp-text', 'article .rich-text', 'article .article-content', 'article .content', 'article']:
+                node = soup.select_one(sel)
+                if node and node.get_text(strip=True):
+                    content = clean_text(node.get_text('\n'))
+                    if content:
+                        break
+        # 若正文仍过短（<200词），再回退到通用解析
+        def _word_count(s: str) -> int:
+            try:
+                return len([w for w in re.split(r'\s+', s.strip()) if w])
+            except Exception:
+                return 0
+        if _word_count(content) < 200:
+            alt = generic_content_by_candidates(soup)
+            if _word_count(alt) > _word_count(content):
+                content = alt
+
+        # 日期（英文到 YYYY-MM-DD）
         pub = ''
         try:
             import json as _json
-
-            def _find_date(obj):
-                if isinstance(obj, dict):
-                    for k in ['datePublished', 'dateCreated', 'dateModified']:
-                        v = obj.get(k)
-                        if isinstance(v, str):
-                            iso = _cn_date_to_iso(v)
-                            if iso:
-                                return iso
-                    for v in obj.values():
-                        r = _find_date(v)
-                        if r:
-                            return r
-                elif isinstance(obj, list):
-                    for it in obj:
-                        r = _find_date(it)
-                        if r:
-                            return r
-                return ''
-
             for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
                 txt = sc.string or sc.get_text() or ''
                 if not txt.strip():
@@ -871,39 +889,60 @@ def parse_deloitte_article(soup: BeautifulSoup, url: str, publish_date: str):
                     data = _json.loads(txt)
                 except Exception:
                     continue
+                def _find_date(obj):
+                    if isinstance(obj, dict):
+                        for k in ['datePublished', 'dateCreated', 'dateModified']:
+                            v = obj.get(k)
+                            if isinstance(v, str) and re.search(r'\d{4}-\d{1,2}-\d{1,2}', v):
+                                return v
+                    if isinstance(obj, list):
+                        for it in obj:
+                            v = _find_date(it)
+                            if v:
+                                return v
+                    return ''
                 d = _find_date(data)
                 if d:
-                    pub = d
-                    break
-            if not pub:
-                m = soup.select_one('meta[property="article:published_time"][content]')
-                if m and m.get('content'):
-                    pub = _cn_date_to_iso(m['content'])
-            if not pub:
-                tnode = soup.select_one('time[datetime]') or soup.select_one('time')
-                if tnode:
-                    pub = _cn_date_to_iso(tnode.get('datetime') or tnode.get_text(strip=True) or '')
-            if not pub:
-                pub = _cn_date_to_iso(soup.get_text(" ", strip=True)) or _cn_date_to_iso(publish_date)
+                    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', d)
+                    if m:
+                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                        break
         except Exception:
-            pub = _cn_date_to_iso(publish_date)
+            pass
+        if not pub:
+            meta_time = soup.select_one('meta[property="article:published_time"][content]')
+            if meta_time and meta_time.get('content'):
+                mt = meta_time['content']
+                m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', mt)
+                if m2:
+                    pub = f"{int(m2.group(1)):04d}-{int(m2.group(2)):02d}-{int(m2.group(3)):02d}"
+        if not pub:
+            t = soup.select_one('time[datetime]')
+            if t and t.get('datetime'):
+                m3 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', t.get('datetime'))
+                if m3:
+                    pub = f"{int(m3.group(1)):04d}-{int(m3.group(2)):02d}-{int(m3.group(3)):02d}"
+        if not pub:
+            pub = publish_date or ''
 
-        # 作者
+        # 作者：JSON-LD / meta / 页面节点
         authors = ''
         try:
             import json as _json
             names = []
-
-            def _add(x):
-                if isinstance(x, dict):
-                    _add(x.get('name') or x.get('author'))
-                elif isinstance(x, (list, tuple)):
+            def _add_name(x):
+                if isinstance(x, str) and x.strip():
+                    names.append(clean_text(x))
+                elif isinstance(x, dict):
+                    n = x.get('name') or x.get('author') or x.get('creator')
+                    if isinstance(n, str) and n.strip():
+                        names.append(clean_text(n))
+                    elif isinstance(n, list):
+                        for e in n:
+                            _add_name(e)
+                elif isinstance(x, list):
                     for e in x:
-                        _add(e)
-                elif isinstance(x, str):
-                    if x.strip():
-                        names.append(clean_text(x))
-
+                        _add_name(e)
             for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
                 txt = sc.string or sc.get_text() or ''
                 if not txt.strip():
@@ -913,704 +952,524 @@ def parse_deloitte_article(soup: BeautifulSoup, url: str, publish_date: str):
                 except Exception:
                     continue
                 if isinstance(data, dict) and 'author' in data:
-                    _add(data.get('author'))
+                    _add_name(data.get('author'))
                 elif isinstance(data, list):
                     for obj in data:
                         if isinstance(obj, dict) and 'author' in obj:
-                            _add(obj.get('author'))
+                            _add_name(obj.get('author'))
             if not names:
-                ma = soup.select_one('meta[name="author"][content]')
-                if ma and ma.get('content'):
-                    names.append(clean_text(ma['content']))
+                meta_author = soup.select_one('meta[name="author"][content]')
+                if meta_author and meta_author.get('content'):
+                    names.append(clean_text(meta_author['content']))
             if not names:
-                # 常见中文“作者/撰文/撰稿：xxx”
-                txt = soup.get_text("\n", strip=True)
-                m1 = re.search(r'(作者|撰文|撰稿)[:：]\s*([^\n\r\t，。,;；/\\]+)', txt)
-                if m1:
-                    for seg in re.split(r'[、，,;；和与及/\\]+', m1.group(2)):
-                        s = seg.strip()
-                        if s and (2 <= len(s) <= 30):
-                            names.append(clean_text(s))
+                for sel in ['a[href*="/insights/author" i]', 'a[href*="/authors/" i]', 'span[class*="author" i]', 'p[class*="author" i]', 'div[class*="author" i]']:
+                    node = soup.select_one(sel)
+                    if node and node.get_text(strip=True):
+                        names.append(clean_text(node.get_text()))
+                        break
             if names:
+                # 去重并保持顺序
+                seen = set()
                 uniq = []
-                used = set()
                 for n in names:
-                    if n and n not in used:
-                        used.add(n)
+                    if n and n not in seen:
+                        seen.add(n)
                         uniq.append(n)
-                authors = '；'.join(uniq)
+                authors = '、'.join(uniq)
         except Exception:
             authors = ''
 
-        # 附件：优先文档；否则音/视频
+        # 附件：优先文档，否则音视频
         file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower(); full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-
-        scope = article_scope or soup
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
+        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8']
+        file_urls, media_urls = [], []
+        container = soup.select_one('article') or soup.select_one('.content') or soup
+        if container:
+            for a in container.select('a[href]'):
+                href = a.get('href', '')
+                if not href:
+                    continue
+                lower = href.lower()
+                full = url_join(url, href)
+                if any(lower.endswith(ext) for ext in file_exts):
+                    file_urls.append(full)
+                elif any(lower.endswith(ext) for ext in media_exts):
+                    media_urls.append(full)
+        # audio/video/iframe 源
         for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
+            for node in soup.select(sel):
+                src = node.get('src', '')
+                if not src:
+                    continue
+                lower = src.lower()
+                full = url_join(url, src)
+                if any(lower.endswith(ext) for ext in file_exts):
+                    file_urls.append(full)
+                elif any(ext in lower for ext in media_exts):
+                    media_urls.append(full)
+
         attachments = ''
         if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
+            attachments = ' ; '.join(file_urls)
         elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
+            attachments = ' ; '.join(media_urls)
 
         if not title or not content:
-            print(f"Deloitte 文章解析失败：标题或正文为空: {url}")
+            print(f"JPM 文章解析失败，标题或正文为空: {url}")
             return None
+
         return {
             'title': title,
             'url': url,
             'publish_date': pub,
             'authors': authors,
-            'thinkank_name': '德勤中国（Deloitte）',
-            'summary': '',
+            'thinkank_name': '摩根大通研究院',
+            'summary': summary,
             'content': content,
             'attachments': attachments,
             'crawl_date': get_current_date()
         }
     except Exception as e:
-        print(f"解析 Deloitte 页面失败: {url} 错误: {e}")
+        print(f"解析 JPM 页面失败: {url} 错误: {e}")
         return None
 
-
-# ------------------------------ 站点解析：清华大学国情研究院（ICCS） ------------------------------
-def parse_iccs_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    解析 清华大学国情研究院（iccs.tsinghua.edu.cn） 文章页：
-    - 标题：优先 h1 / og:title / <title>
-    - 正文：优先常见正文容器，回退通用提取
-    - 日期：尝试 time/meta/页面文本中的 YYYY-MM-DD/年-月-日
-    - 作者：尽力从“作者/撰文/撰稿”等字段提取姓名；若无法可靠获取则留空
-    - 附件：优先返回文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；并存时仅返回文档
-    - thinkank_name：统一填写为“清华大学国情研究院”
-    """
+def parse_wechat_article(soup, url, publish_date):
+    """解析微信文章（mp.weixin.qq.com）"""
     try:
+        def norm_date_from_ct(ct_val: str) -> str:
+            try:
+                import datetime
+                ts = int(ct_val)
+                dt = datetime.datetime.fromtimestamp(ts)
+                return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+            except Exception:
+                return ''
+
         # 标题
-        title = ''
-        tnode = (
-            soup.select_one('h1') or
-            soup.select_one('.article-title h1') or
-            soup.select_one('.title h1') or
-            soup.select_one('.detail h1')
+        title_node = (
+            soup.select_one('h1#activity-name') or
+            soup.select_one('h1.rich_media_title') or
+            soup.select_one('meta[property="og:title"][content]')
         )
-        if tnode and tnode.get_text(strip=True):
-            title = clean_text(tnode.get_text())
+        title = ''
+        if title_node:
+            if getattr(title_node, 'name', '') == 'meta' and title_node.get('content'):
+                title = clean_text(title_node['content'])
+            else:
+                title = clean_text(title_node.get_text())
         if not title:
             title = generic_title_from_meta_or_h(soup)
 
         # 正文
-        def _scope_text(scope: BeautifulSoup) -> str:
-            if scope is None:
-                return ''
-            # 尽量按段落/标题拼接
-            parts = []
-            for node in scope.select('p, li, h2, h3, h4'):
-                txt = (node.get_text('\n', strip=True) or '').strip()
-                if not txt:
-                    continue
-                parts.append(clean_text(txt))
-            if parts:
-                return ' '.join(parts)
-            bulk = scope.get_text('\n', strip=True)
-            return clean_text(bulk)
+        content_node = soup.select_one('#js_content') or soup.select_one('div#js_content')
+        content = clean_text(content_node.get_text("\n")) if content_node else generic_content_by_candidates(soup)
 
-        main_scope = (
-            soup.select_one('article') or
-            soup.select_one('div.article') or
-            soup.select_one('div.content') or
-            soup.select_one('div.text') or
-            soup.select_one('div.con') or
-            soup.select_one('div.detail') or
-            soup
-        )
-        content = _scope_text(main_scope)
-        if not content:
-            content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        # 优先 time/meta
-        tmeta = soup.select_one('time[datetime]')
-        if tmeta and tmeta.get('datetime'):
-            m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', tmeta.get('datetime'))
-            if m:
-                pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        # 发表日期
+        pub_node = soup.select_one('#publish_time') or soup.select_one('span#publish_time')
+        pub = clean_text(pub_node.get_text()) if pub_node else ''
         if not pub:
-            # 常见“发布时间/日期”字段
-            date_nodes = soup.select('span, em, i, .date, .time, p')
-            for dn in date_nodes:
-                raw = dn.get_text(' ', strip=True)
-                m = re.search(r'(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})', raw)
+            # 部分页面在脚本变量中存放 ct（秒级时间戳）
+            for sc in soup.find_all('script'):
+                txt = sc.get_text() or ''
+                m = re.search(r"var\s+ct\s*=\s*\"(\d+)\"", txt)
                 if m:
-                    pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    pub = norm_date_from_ct(m.group(1))
                     break
         if not pub:
-            pub = publish_date or ''
-
-        # 作者（尽力提取“作者/撰文/撰稿”字段；避免把“来源”误当作者）
-        authors = ''
-        try:
-            possible_blocks = soup.select('p, div, span, li')
-            cand = []
-            for n in possible_blocks:
-                txt = (n.get_text(' ', strip=True) or '').strip()
-                if not txt:
-                    continue
-                if any(k in txt for k in ['作者', '撰文', '撰稿', '文/']):
-                    # 常见格式：“作者：张三 李四”、“撰文：张三”、“文/张三”
-                    # 去掉“来源/责任编辑”等
-                    if '来源' in txt or '责任编辑' in txt:
-                        continue
-                    cand.append(txt)
-            # 解析候选文本中的人名
-            names = []
-            for c in cand:
-                # 优先“作者：xxx”
-                m = re.search(r'(作者|撰文|撰稿)[:：]\s*([^|；;、，。\s][^；;，。]*)', c)
-                if m:
-                    part = m.group(2)
-                    # 分割常见分隔符
-                    for seg in re.split(r'[、，,;；和与及/\\]+', part):
-                        s = seg.strip()
-                        if s and (2 <= len(s) <= 20):
-                            names.append(clean_text(s))
-                    continue
-                # 次选“文/xxx”
-                m2 = re.search(r'文[/：:]\s*([^|；;、，。\s][^；;，。]*)', c)
-                if m2:
-                    s = m2.group(1).strip()
-                    if s and (2 <= len(s) <= 20):
-                        names.append(clean_text(s))
-            if names:
-                uniq = []
-                used = set()
-                for n in names:
-                    if n and n not in used:
-                        used.add(n)
-                        uniq.append(n)
-                authors = '、'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件：优先文档；否则音视频；并存仅保留文档
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower()
-            full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-
-        scope = soup.select_one('article') or soup
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
-        if not title or not content:
-            print(f"ICCS 文章解析失败：标题或正文为空: {url}")
-            return None
-        return {
-            'title': title,
-            'url': url,
-            'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '清华大学国情研究院',
-            'summary': '',
-            'content': content,
-            'attachments': attachments,
-            'crawl_date': get_current_date()
-        }
-    except Exception as e:
-        print(f"解析 ICCS 页面失败: {url} 错误: {e}")
-        return None
-
-# ------------------------------ 站点解析：复旦大学中国研究院（cifu.fudan.edu.cn） ------------------------------
-def parse_fudan_article(soup: BeautifulSoup, url: str, publish_date: str):
-    """
-    解析 复旦大学中国研究院（cifu.fudan.edu.cn）文章页：
-    - 标题：优先 h1；回退 og:title / <title>
-    - 正文：优先 div.wp_articlecontent；回退常见正文容器与通用提取
-    - 日期：优先提取“发布日期/发布时间”或文本中的 YYYY-MM-DD / YYYY年MM月DD日；缺失则用列表页日期
-    - 作者：尽力从“作者/撰文/撰稿/文/xxx”等字段提取；若无法可靠获取则留空
-    - 附件：优先文档（pdf/doc/xls/ppt 等）；若无文档且存在音频/视频则返回其 URL；并存时仅返回文档
-    - thinkank_name：统一填写为“复旦大学中国研究院”
-    """
-    try:
-        # 标题
-        title = ''
-        tnode = (
-            soup.select_one('h1') or
-            soup.select_one('.article-title h1') or
-            soup.select_one('.title h1')
-        )
-        if tnode and tnode.get_text(strip=True):
-            title = clean_text(tnode.get_text())
-        if not title:
-            title = generic_title_from_meta_or_h(soup)
-
-        # 正文
-        def _scope_text(scope: BeautifulSoup) -> str:
-            if scope is None:
-                return ''
-            parts = []
-            for node in scope.select('p, li, h2, h3, h4'):
-                txt = (node.get_text('\n', strip=True) or '').strip()
-                if not txt:
-                    continue
-                parts.append(clean_text(txt))
-            if parts:
-                return ' '.join(parts)
-            bulk = scope.get_text('\n', strip=True)
-            return clean_text(bulk)
-
-        main_scope = (
-            soup.select_one('div.wp_articlecontent') or
-            soup.select_one('div.article') or
-            soup.select_one('div.content') or
-            soup.select_one('div.text') or
-            soup.select_one('div#vsb_content') or
-            soup.select_one('div.v_news_content') or
-            soup
-        )
-        content = _scope_text(main_scope)
-        if not content:
-            content = generic_content_by_candidates(soup)
-
-        # 日期
-        pub = ''
-        try:
-            # 常见“发布日期/发布时间”容器
-            date_nodes = soup.select('span, em, i, .date, .time, p, div')
-            for dn in date_nodes:
-                raw = (dn.get_text(' ', strip=True) or '').strip()
-                if not raw:
-                    continue
-                if any(k in raw for k in ['发布日期', '发布时间', '时间', '日期']):
-                    m = re.search(r'(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})', raw)
-                    if m:
-                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                        break
-            if not pub:
-                # 任意包含日期的节点
-                for dn in date_nodes:
-                    raw = (dn.get_text(' ', strip=True) or '').strip()
-                    m = re.search(r'(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})', raw)
-                    if m:
-                        pub = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                        break
-        except Exception:
-            pass
+            # meta 兜底
+            meta_pub = soup.select_one('meta[property="og:release_date"][content]')
+            if meta_pub and meta_pub.get('content'):
+                pub = clean_text(meta_pub['content'])
         if not pub:
             pub = publish_date or ''
 
-        # 作者（尽力提取“作者/撰文/撰稿/文/xxx”，忽略“来源/责任编辑”等）
-        authors = ''
-        try:
-            possible_blocks = soup.select('p, div, span, li')
-            cand = []
-            for n in possible_blocks:
-                txt = (n.get_text(' ', strip=True) or '').strip()
-                if not txt:
-                    continue
-                if any(k in txt for k in ['作者', '撰文', '撰稿', '文/']):
-                    if '来源' in txt or '责任编辑' in txt:
-                        continue
-                    cand.append(txt)
-            names = []
-            for c in cand:
-                m = re.search(r'(作者|撰文|撰稿)[:：]\s*([^|、，。\s][^，。]*)', c)
-                if m:
-                    part = m.group(2)
-                    for seg in re.split(r'[、，,;；和与及/\\]+', part):
-                        s = seg.strip()
-                        if s and (2 <= len(s) <= 30):
-                            names.append(clean_text(s))
-                    continue
-                m2 = re.search(r'文[/：]\s*([^|、，。\s][^，。]*)', c)
-                if m2:
-                    s = m2.group(1).strip()
-                    if s and (2 <= len(s) <= 30):
-                        names.append(clean_text(s))
-            if names:
-                uniq = []
-                used = set()
-                for n in names:
-                    if n and n not in used:
-                        used.add(n)
-                        uniq.append(n)
-                authors = '、'.join(uniq)
-        except Exception:
-            authors = ''
-
-        # 附件：优先文档；否则音视频；并存仅保留文档
-        file_exts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-        media_exts = ['.mp3', '.m4a', '.wav', '.mp4', '.m3u8', '.mov', '.m4v']
-        file_urls, media_urls = set(), set()
-
-        def _maybe_add(u: str):
-            if not u:
-                return
-            lower = (u or '').lower()
-            full = url_join(url, u)
-            if any(lower.endswith(ext) for ext in file_exts):
-                file_urls.add(full)
-            elif any(lower.endswith(ext) for ext in media_exts) or any(x in lower for x in media_exts):
-                media_urls.add(full)
-
-        scope = main_scope or soup
-        for a in scope.select('a[href], a[data-asset], a[data-href], a[data-url]'):
-            _maybe_add(a.get('href') or a.get('data-asset') or a.get('data-href') or a.get('data-url'))
-        for sel in ['audio source[src]', 'audio[src]', 'video source[src]', 'video[src]', 'iframe[src]']:
-            for node in scope.select(sel):
-                _maybe_add(node.get('src'))
-        attachments = ''
-        if file_urls:
-            attachments = ' ; '.join(sorted(file_urls))
-        elif media_urls:
-            attachments = ' ; '.join(sorted(media_urls))
-
         if not title or not content:
-            print(f"FUDAN 文章解析失败：标题或正文为空: {url}")
+            print(f"微信文章解析失败，标题或内容为空: {url}")
             return None
-        return {
+
+        data = {
             'title': title,
             'url': url,
             'publish_date': pub,
-            'authors': authors,
-            'thinkank_name': '复旦大学中国研究院',
+            'authors': '北京大学国家发展研究院',
+            'thinkank_name': '北京大学国家发展研究院',
             'summary': '',
             'content': content,
-            'attachments': attachments,
+            'attachments': '',
             'crawl_date': get_current_date()
         }
+        return data
     except Exception as e:
-        print(f"解析 FUDAN 页面失败: {url} 错误: {e}")
+        print(f"解析微信页面 {url} 失败: {e}")
         return None
 
-# ------------------------------ 通用抓取 ------------------------------
+def parse_nsd_article(soup, url, publish_date):
+    """解析北京大学国家发展研究院站内文章"""
+    try:
+        # 标题候选
+        title_selectors = [
+            'h1', '.title h1', '.article-title', '.arti_title', '.wp_article_title', '.news-title'
+        ]
+        content_selectors = [
+            '.TRS_Editor', '.v_news_content', '.wp_articlecontent', '.article-content', '.content', '#content', '.text', '.read'
+        ]
+        title = ''
+        for sel in title_selectors:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                title = clean_text(node.get_text())
+                break
+        content = ''
+        for sel in content_selectors:
+            node = soup.select_one(sel)
+            if node and node.get_text(strip=True):
+                content = clean_text(node.get_text("\n"))
+                break
+        if not title:
+            title = generic_title_from_meta_or_h(soup)
+        if not content:
+            content = generic_content_by_candidates(soup)
+        if not title or not content:
+            print(f"NSD文章解析失败，标题或内容为空: {url}")
+            return None
+        data = {
+            'title': title,
+            'url': url,
+            'publish_date': publish_date,
+            'authors': '北京大学国家发展研究院',
+            'thinkank_name': '北京大学国家发展研究院',
+            'summary': '',
+            'content': content,
+            'attachments': '',
+            'crawl_date': get_current_date()
+        }
+        return data
+    except Exception as e:
+        print(f"解析NSD页面 {url} 失败: {e}")
+        return None
+
 def crawl_article_content(url, publish_date, headers, title_hint=None):
-    lower_url = (url or '').lower()
-
-    # Deloitte China：常规请求解析
-    if 'deloitte.com' in lower_url:
+    """爬取文章内容的通用函数"""
+    # 增加重试机制，最多重试3次
+    retry_count = 3
+    html = None
+    lower_url = url.lower()
+    # 按域名定制请求头（例如微信需要 Referer）
+    req_headers = dict(headers or {})
+    if 'mp.weixin.qq.com' in lower_url and 'Referer' not in req_headers:
+        req_headers['Referer'] = 'https://weixin.sogou.com/'
+        req_headers.setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+        req_headers.setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
+        req_headers.setdefault('Upgrade-Insecure-Requests', '1')
+    # 直接文件链接（如月报 PDF/DOCX 等）
+    if any(lower_url.endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+        data = {}
+        data['title'] = title_hint or clean_text(lower_url.split('/')[-1])
+        data['url'] = url
+        data['publish_date'] = publish_date
+        if 'cdi.com.cn' in lower_url:
+            data['authors'] = '综合开发研究院（中国·深圳）'
+            data['thinkank_name'] = '综合开发研究院（中国·深圳）'
+        else:
+            data['authors'] = ''
+            data['thinkank_name'] = ''
+        data['summary'] = ''
+        data['content'] = ''
+        data['attachments'] = url
+        data['crawl_date'] = get_current_date()
+        return data
+    
+    while retry_count > 0:
         try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is None or resp.status_code >= 400 or not resp.text:
+            # 设置超时时间为15秒，避免无限等待
+            html = requests.get(url=url, headers=req_headers, timeout=15, proxies=NO_PROXIES)
+            # 优先使用服务端声明编码，其次使用apparent_encoding，最后退回utf-8
+            if not html.encoding or html.encoding.lower() in ['iso-8859-1', 'ascii']:
+                html.encoding = html.apparent_encoding or 'utf-8'
+            break  # 成功获取则退出重试循环
+        except RequestException as e:
+            retry_count -= 1
+            print(f"请求 {url} 失败: {e}，剩余重试次数: {retry_count}")
+            if retry_count == 0:
+                print(f"多次请求失败，跳过该链接: {url}")
                 return None
-            soup = BeautifulSoup(resp.text, 'lxml')
-            return parse_deloitte_article(soup, url, publish_date)
-        except Exception:
+            time.sleep(2)  # 重试前等待2秒
+    
+    if not html or html.status_code != 200:
+        print(f"请求失败，状态码: {html.status_code if html else 'None'}")
+        return None
+    
+    try:
+        soup = BeautifulSoup(html.text, 'lxml')
+        
+        # 根据URL判断使用哪个解析函数
+        if 'www.ciecc.com.cn' in url:
+            return parse_ciecc_article(soup, url, publish_date)
+        elif 'nads.ruc.edu.cn' in url:
+            return parse_ruc_article(soup, url, publish_date)
+        elif 'www.drc.gov.cn' in url:
+            return parse_drc_article(soup, url, publish_date)
+        elif 'www.cas.cn' in url:
+            return parse_cas_article(soup, url, publish_date)
+        elif 'www.amr.org.cn' in url:
+            return parse_amr_article(soup, url, publish_date)
+        elif 'www.ccidgroup.com' in url:
+            return parse_ccid_article(soup, url, publish_date)
+        elif 'www.sass.org.cn' in url:
+            return parse_sass_article(soup, url, publish_date)
+        elif 'www.cdi.com.cn' in url or 'cdi.com.cn' in url:
+            return parse_cdi_article(soup, url, publish_date)
+        elif 'jpmorgan.com' in url or 'www.jpmorgan.com' in url:
+            return parse_jpm_article(soup, url, publish_date)
+        elif 'www.rand.org' in url or 'rand.org' in url:
+            # 使用改进版解析器，优先提取摘要正文
+            return parse_rand_article2(soup, url, publish_date)
+        elif 'mp.weixin.qq.com' in url:
+            return parse_wechat_article(soup, url, publish_date)
+        elif 'nsd.pku.edu.cn' in url:
+            return parse_nsd_article(soup, url, publish_date)
+        else:
+            print(f"未知网站，无法解析: {url}")
             return None
-
-    # 清华大学国情研究院（iccs.tsinghua.edu.cn）：常规请求 + DOM 解析
-    if 'iccs.tsinghua.edu.cn' in lower_url:
-        try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is None or resp.status_code >= 400 or not resp.text:
-                return None
-            soup = BeautifulSoup(resp.text, 'lxml')
-            return parse_iccs_article(soup, url, publish_date)
-        except Exception:
-            return None
-
-    # 复旦大学中国研究院（cifu.fudan.edu.cn）：常规请求 + DOM 解析
-    if 'cifu.fudan.edu.cn' in lower_url:
-        try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is None or resp.status_code >= 400 or not resp.content:
-                return None
-            # 修正编码：若无 charset 或给出 iso-8859-1/ascii，则采用 apparent_encoding
-            ct = (resp.headers.get('content-type') or '').lower()
-            if (not resp.encoding) or (resp.encoding.lower() in ['iso-8859-1', 'ascii']) or ('charset=' not in ct):
-                try:
-                    resp.encoding = resp.apparent_encoding or 'utf-8'
-                except Exception:
-                    resp.encoding = 'utf-8'
-            html = resp.text if resp.encoding else resp.content.decode('utf-8', errors='ignore')
-            soup = BeautifulSoup(html, 'lxml')
-            return parse_fudan_article(soup, url, publish_date)
-        except Exception:
-            return None
-
-    # IISS：iiss.org 先尝试 requests，若 403/空白再用 undetected-chromedriver 获取 HTML
-    if 'iiss.org' in lower_url:
-        # 尝试直接请求
-        try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is not None and resp.status_code < 400 and resp.text:
-                soup = BeautifulSoup(resp.text, 'lxml')
-                r = parse_iiss_article(soup, url, publish_date)
-                if r:
-                    return r
-        except Exception:
-            pass
-        # 回退：用 undetected-chromedriver 获取渲染后的 HTML
-        try:
-            from selenium.webdriver.chrome.options import Options as _ChromeOptions
-            import undetected_chromedriver as _uc
-            from selenium.webdriver.common.by import By as _By
-            from selenium.webdriver.support.ui import WebDriverWait as _Wait
-            from selenium.webdriver.support import expected_conditions as _EC
-            _opts = _ChromeOptions()
-            try:
-                _opts.page_load_strategy = 'none'
-            except Exception:
-                pass
-            _opts.add_argument('--disable-blink-features=AutomationControlled')
-            _opts.add_argument('--ignore-certificate-errors')
-            _opts.add_argument('--ignore-ssl-errors')
-            _opts.add_argument('--disable-site-isolation-trials')
-            _opts.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-            _driver = _uc.Chrome(options=_opts)
-            try:
-                _driver.get(url)
-                # Cookie 同意按钮（尽力点击）
-                try:
-                    _Wait(_driver, 8).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'button#onetrust-accept-btn-handler')))
-                    _driver.execute_script("var b=document.querySelector('button#onetrust-accept-btn-handler'); if(b){b.click()} ")
-                except Exception:
-                    pass
-                try:
-                    _Wait(_driver, 18).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'main, article, h1')))
-                except Exception:
-                    pass
-                html_text = _driver.page_source
-            finally:
-                try:
-                    _driver.quit()
-                except Exception:
-                    pass
-            if html_text and html_text.strip():
-                soup = BeautifulSoup(html_text, 'lxml')
-                return parse_iiss_article(soup, url, publish_date)
-        except Exception:
-            pass
+            
+    except Exception as e:
+        print(f"解析页面 {url} 失败: {e}")
         return None
 
-    # Bain China（bain.cn）：常规请求 + DOM 解析（优先于通用逻辑）
-    if 'bain.cn' in lower_url:
-        try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is None or resp.status_code >= 400 or not resp.text:
-                return None
-            soup = BeautifulSoup(resp.text, 'lxml')
-            return parse_bain_article(soup, url, publish_date)
-        except Exception:
-            return None
-
-    # EY China：常规请求解析
-    if 'ey.com' in lower_url:
-        try:
-            resp = requests.get(url, headers=headers or {}, timeout=20, proxies=NO_PROXIES)
-            if resp is None or resp.status_code >= 400 or not resp.text:
-                return None
-            soup = BeautifulSoup(resp.text, 'lxml')
-            return parse_ey_article(soup, url, publish_date)
-        except Exception:
-            return None
-
-    # BCG：优先浏览器渲染（requests 经常被拦）
-    if 'bcg.com' in lower_url:
-        try:
-            from selenium.webdriver.chrome.options import Options as _ChromeOptions
-            import undetected_chromedriver as _uc
-            from selenium.webdriver.common.by import By as _By
-            from selenium.webdriver.support.ui import WebDriverWait as _Wait
-            from selenium.webdriver.support import expected_conditions as _EC
-            _opts = _ChromeOptions()
-            try:
-                _opts.page_load_strategy = 'none'
-            except Exception:
-                pass
-            _opts.add_argument('--disable-blink-features=AutomationControlled')
-            _opts.add_argument('--ignore-certificate-errors')
-            _opts.add_argument('--ignore-ssl-errors')
-            _opts.add_argument('--disable-site-isolation-trials')
-            _opts.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-            _driver = _uc.Chrome(options=_opts)
-            try:
-                _driver.get(url)
-                try:
-                    _Wait(_driver, 8).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'button#onetrust-accept-btn-handler')))
-                    _driver.execute_script("var b=document.querySelector('button#onetrust-accept-btn-handler'); if(b){b.click()} ")
-                except Exception:
-                    pass
-                try:
-                    _Wait(_driver, 18).until(_EC.presence_of_element_located((_By.CSS_SELECTOR, 'main, article, h1')))
-                except Exception:
-                    pass
-                html_text = _driver.page_source
-            finally:
-                try:
-                    _driver.quit()
-                except Exception:
-                    pass
-            if html_text and html_text.strip():
-                soup = BeautifulSoup(html_text, 'lxml')
-                return parse_bcg_article(soup, url, publish_date)
-        except Exception as e:
-            print(f"BCG 无头浏览器抓取失败: {e}")
-        return None
-
-    # 其他域名（此简化版仅支持 BCG）
-    return None
-
-
-# ------------------------------ 主流程 ------------------------------
-def main(only_domain: str = '', force_domain: str = ''):
-    print("开始提取聚合页面的条目...")
+def main():
+    """主函数"""
+    print("开始爬取智库文章内容...")
+    
+    lst = []  # 本次新增内容
+    # 读取已有输出，准备跳过已抓取的 URL
     OUTPUT_JSON_PATH = 'output_complete.json'
     existing_items, seen_urls = load_existing_results(OUTPUT_JSON_PATH)
-    print(f"已有历史条目 {len(existing_items)}，将跳过已抓取 URL")
-    # 记录已存在条目的 URL -> 索引，便于更新 thinkank_name
+    print(f"已载入历史条目 {len(existing_items)} 条，将跳过重复 URL")
+    # URL->索引映射，便于修正已有记录的栏目名称
     existing_map = {}
-    for idx, rec in enumerate(existing_items):
+    for idx, it in enumerate(existing_items):
         try:
-            u = normalize_url(rec.get('url', ''))
+            u = normalize_url(it.get('url', ''))
             if u:
                 existing_map[u] = idx
         except Exception:
             continue
-
+    updated_existing = False
+    run_seen_urls = set()  # 本轮去重，避免同一次运行内重复抓取
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0'
+    }
+    
     try:
+        # 读取生成的HTML文件
         with open('generated_html/index.html', 'r', encoding='utf-8') as f:
             s = f.read()
-    except Exception as e:
-        print(f"读取 generated_html/index.html 失败: {e}")
-        return
-
-    soup = BeautifulSoup(s, 'lxml')
-    nodes = soup.select('.page-board-item')
-    if only_domain:
-        # 仅保留指定主域名（后缀匹配），避免如 mckinsey.com.cn 误命中 "ey.com"
-        from urllib.parse import urlparse as _urlparse
-        target = (only_domain or '').lower().strip()
-        def _host_ok(n):
+        
+        soup = BeautifulSoup(s, 'lxml')
+        sj_lst = soup.select('.page-board-item')
+        if len(sj_lst) == 0:
+            print("聚合页没有发现条目，启用 CDI 栏目直抓模式...")
+            def norm_date(text: str) -> str:
+                if not text:
+                    return ''
+                m = re.search(r'(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})', text)
+                if m:
+                    y, m1, d = m.groups()
+                    return f"{int(y):04d}-{int(m1):02d}-{int(d):02d}"
+                return text
+            def fetch(url: str):
+                for _ in range(3):
+                    try:
+                        r = requests.get(url, headers=headers, timeout=15, proxies=NO_PROXIES)
+                        if not r.encoding or r.encoding.lower() in ['iso-8859-1', 'ascii']:
+                            r.encoding = r.apparent_encoding or 'utf-8'
+                        if r.status_code == 200:
+                            return r.text
+                    except RequestException:
+                        time.sleep(1)
+                return ''
+            base = 'http://www.cdi.com.cn'
+            columns = [102, 152, 150, 153, 154]
+            max_pages = 2
+            detail_tasks = []
+            for cid in columns:
+                for p in range(1, max_pages + 1):
+                    url = f"{base}/Article/List?ColumnId={cid}" + ('' if p == 1 else f"&pageIndex={p}")
+                    html = fetch(url)
+                    if not html:
+                        continue
+                    sp = BeautifulSoup(html, 'lxml')
+                    ul = sp.select_one('ul#ColumnsList')
+                    if not ul:
+                        continue
+                    for li in ul.select('li'):
+                        a = li.select_one('div.img a') or li.select_one('div.details a.a-full') or li.select_one('a')
+                        if not a or not a.get('href'):
+                            continue
+                        link = url_join(url, a['href'])
+                        title_node = li.select_one('div.info span') or li.select_one('span')
+                        title_hint = clean_text(title_node.get_text()) if title_node else ''
+                        em = li.select_one('div.info em') or li.select_one('em')
+                        pub = norm_date(em.get_text()) if em else ''
+                        detail_tasks.append((link, pub, title_hint))
+            for p in range(1, max_pages + 1):
+                url = f"{base}/Files/ListYear?ColumnId=155" + ('' if p == 1 else f"&pageIndex={p}")
+                html = fetch(url)
+                if not html:
+                    continue
+                sp = BeautifulSoup(html, 'lxml')
+                container = sp.select_one('div#ColumnsList')
+                if not container:
+                    continue
+                for a in container.select('ul.setimage320 li a.item'):
+                    if not a.get('href'):
+                        continue
+                    link = url_join(url, a['href'])
+                    info_span = a.select_one('div.info span')
+                    title_hint = clean_text(info_span.get_text()) if info_span else ''
+                    em = a.select_one('div.info em')
+                    pub = norm_date(em.get_text()) if em else ''
+                    detail_tasks.append((link, pub, title_hint))
+            # 过滤已存在的 URL，避免重复抓取
+            _filtered = []
+            _skip_cnt = 0
+            for (_u, _pub, _t) in detail_tasks:
+                _nu = normalize_url(_u)
+                if (not _nu) or (_nu in seen_urls) or (_nu in run_seen_urls):
+                    _skip_cnt += 1
+                    continue
+                run_seen_urls.add(_nu)
+                _filtered.append((_u, _pub, _t))
+            detail_tasks = _filtered
+            print(f"已从直抓任务中过滤已存在 {_skip_cnt} 条，剩余 {len(detail_tasks)} 条需要处理")
+            print(f"直抓模式共发现 {len(detail_tasks)} 篇文章/文件，开始逐条解析...")
+            for i, (u, pub, t_hint) in enumerate(detail_tasks, 1):
+                try:
+                    print(f"[{i}/{len(detail_tasks)}] {u}")
+                    data = crawl_article_content(u, pub, headers, title_hint=t_hint)
+                    if data:
+                        lst.append(data)
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"处理 {u} 出错: {e}")
+        
+        print(f"找到 {len(sj_lst)} 篇文章需要爬取")
+        
+        # 遍历每篇文章
+        total_cnt = len(sj_lst)
+        skipped_cnt = 0
+        for i, m in enumerate(sj_lst, 1):
             try:
-                href = n.select('a')[0]['href']
-                host = _urlparse(href).netloc.lower()
-                return host.endswith(target)
-            except Exception:
-                return False
-        nodes = [n for n in nodes if _host_ok(n)]
-
-    print(f"找到 {len(nodes)} 条待处理" + (f"（仅 {only_domain}）" if only_domain else ''))
-    lst = []
-    run_seen = set()
-    updated_existing = False
-
-    headers = {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
-    }
-
-    for i, n in enumerate(nodes, 1):
-        try:
-            a = n.select('a')[0]
-            url = a['href']
-            pub = ''
-            try:
-                pub = n.select('span')[0].get_text(strip=True)
-            except Exception:
-                pub = ''
-            # 取所在板块标题作为 thinktank/栏目全名，避免多栏目合并后丢失栏目信息
-            board_name = ''
-            try:
-                parent_board = n.find_parent('div', class_='page-board')
-                h2 = parent_board.select_one('h2') if parent_board else None
-                board_name = h2.get_text(strip=True) if h2 else ''
-            except Exception:
+                # 获取栏目名（上级 page-board 的 h2），用于区分同一智库下的不同栏目
                 board_name = ''
-            nu = normalize_url(url)
-            # 若已有记录，且栏目名需要更新，则同步修正
-            if board_name and nu in existing_map:
                 try:
-                    idx = existing_map[nu]
-                    if existing_items[idx].get('thinkank_name') != board_name:
-                        existing_items[idx]['thinkank_name'] = board_name
-                        updated_existing = True
+                    parent_board = m.find_parent('div', class_='page-board')
+                    h2 = parent_board.select_one('h2') if parent_board else None
+                    board_name = h2.get_text(strip=True) if h2 else ''
                 except Exception:
-                    pass
-            # 若指定了 force_domain，且 URL 主机匹配该域，则忽略历史去重强制重抓
-            skip_seen = True
-            if force_domain:
-                from urllib.parse import urlparse as _urlparse
+                    board_name = ''
+                url = m.select('a')[0]['href']
+                publish_date = m.select('span')[0].text
+                # 已存在则跳过（先于正文抓取与标题获取）
+                nu = normalize_url(url)
+                # 若已有记录但栏目名不同，修正已有记录
+                if board_name and nu in existing_map:
+                    try:
+                        idx = existing_map[nu]
+                        if existing_items[idx].get('thinkank_name') != board_name:
+                            existing_items[idx]['thinkank_name'] = board_name
+                            updated_existing = True
+                    except Exception:
+                        pass
+                if (not nu) or (nu in seen_urls) or (nu in run_seen_urls):
+                    skipped_cnt += 1
+                    continue
+                run_seen_urls.add(nu)
+                # 从聚合页获取标题作为 hint（用于文件型链接）
                 try:
-                    host = _urlparse(nu).netloc.lower()
-                    if host.endswith(force_domain.lower().strip()):
-                        skip_seen = False
-                    else:
-                        skip_seen = True
+                    title_hint = clean_text(m.select('h3')[0].get_text())
                 except Exception:
-                    skip_seen = True
-            if (not nu) or ((nu in seen_urls) and skip_seen) or (nu in run_seen):
+                    title_hint = ''
+                
+                print(f"正在处理第 {i}/{len(sj_lst)} 篇文章: {url}")
+                
+                # 爬取文章内容
+                data = crawl_article_content(url, publish_date, headers, title_hint=title_hint)
+                
+                if data:
+                    if board_name:
+                        data['thinkank_name'] = board_name
+                    lst.append(data)
+                    print(f"成功爬取: {data['title'][:50]}...")
+                else:
+                    print(f"爬取失败: {url}")
+                
+                # 添加延迟，避免请求过于频繁
+                time.sleep(1)
+                
+            except (IndexError, KeyError) as e:
+                print(f"获取链接失败: {e}，跳过当前项")
                 continue
-            run_seen.add(nu)
-            print(f"[{i}/{len(nodes)}] 抓取: {url}")
-            data = crawl_article_content(url, pub, headers)
-            if data:
-                if board_name:
-                    data['thinkank_name'] = board_name
-                lst.append(data)
-                print(f"成功: {data['title'][:60]}...")
+            except Exception as e:
+                print(f"处理文章时发生错误: {e}，跳过当前项")
+                continue
+        
+        print(f"爬取完成，共成功爬取 {len(lst)} 篇文章")
+        
+        # 输出：有新增或修正栏目名时写回
+        if lst or updated_existing:
+            combined = existing_items + lst
+            with open(OUTPUT_JSON_PATH, 'w', encoding='utf-8') as f:
+                json.dump(combined, f, ensure_ascii=False, indent=2, default=str)
+            if lst and updated_existing:
+                print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)} 条，并修正栏目名称，累计 {len(combined)} 条")
+            elif lst:
+                print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)} 条，累计 {len(combined)} 条")
             else:
-                print("失败或跳过")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"条目处理异常: {e}")
-            continue
-
-    if lst or updated_existing:
-        combined = existing_items + lst
-        with open(OUTPUT_JSON_PATH, 'w', encoding='utf-8') as f:
-            json.dump(combined, f, ensure_ascii=False, indent=2, default=str)
-        if lst and updated_existing:
-            print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)}，并更新现有栏目名，累计 {len(combined)} 条")
-        elif lst:
-            print(f"已保存到 {OUTPUT_JSON_PATH}，新增 {len(lst)}，累计 {len(combined)} 条")
+                print(f"已修正栏目名称，未新增内容，累计 {len(combined)} 条")
         else:
-            print(f"已更新栏目名称，未新增内容，累计 {len(combined)} 条")
-    else:
-        print("未新增数据，output_complete.json 保持不变")
+            print("无新增内容，保留已有 output_complete.json")
+    except Exception as e:
+        print(f"程序执行过程中发生错误: {e}")
+
+def _identify_problematic_rand_urls_from_file(json_path='output_complete.json'):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    urls = []
+    import re
+    for it in data:
+        u = (it.get('url') or '').lower()
+        if 'rand.org' not in u:
+            continue
+        content = (it.get('content') or '').strip()
+        too_short = len(content) < 300
+        meta_sign = bool(re.search(r'(Published in:|Posted on rand\.org|RESEARCH\s+—|Published on|This commentary was originally published|RAND Europe|Keywords:)', content, re.I))
+        if too_short or meta_sign:
+            urls.append(it.get('url'))
+    return urls
+
+def _remove_items_by_urls_file(json_path, remove_urls):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        data = []
+    s = set(remove_urls or [])
+    kept = [it for it in data if (it.get('url') or '') not in s]
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(kept, f, ensure_ascii=False, indent=2, default=str)
+    return len(data), len(kept)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
-    only = ''
-    force = ''
-    argv = sys.argv[1:]
-    i = 0
-    while i < len(argv):
-        if argv[i] == '--only-domain' and i + 1 < len(argv):
-            only = argv[i + 1]; i += 2; continue
-        if argv[i] == '--force-domain' and i + 1 < len(argv):
-            force = argv[i + 1]; i += 2; continue
-        i += 1
-    main(only_domain=only, force_domain=force)
+    if len(sys.argv) > 1 and sys.argv[1] == '--repair-rand':
+        urls = _identify_problematic_rand_urls_from_file('output_complete.json')
+        print(f"检测到需修复的 RAND 条目: {len(urls)}")
+        before, after = _remove_items_by_urls_file('output_complete.json', urls)
+        print(f"已移除 {before-after} 条，剩余 {after} 条。")
+    else:
+        main()
