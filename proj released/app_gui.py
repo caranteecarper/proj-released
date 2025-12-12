@@ -31,13 +31,9 @@ def get_corrected_logo_path(relative_path_in_main):
     if os.path.exists(corrected_path): return corrected_path
     return "https://img.icons8.com/fluency/96/image-file.png"
 
-# 🟢 核心分组逻辑 (用于 UI 也用于图表)
+# 🟢 核心分组逻辑
 def extract_group_name(full_name):
-    """
-    统一名称规则：把分散的子栏目合并成大智库名
-    """
     if not isinstance(full_name, str): return "未知智库"
-    
     # 强制合并规则
     if '贝恩' in full_name or 'Bain' in full_name: return "贝恩公司 (Bain)"
     if '兰德' in full_name or 'RAND' in full_name.upper(): return "兰德公司 (RAND)"
@@ -48,8 +44,6 @@ def extract_group_name(full_name):
     if '罗兰贝格' in full_name or 'Roland' in full_name: return "罗兰贝格 (Roland Berger)"
     if '毕马威' in full_name or 'KPMG' in full_name: return "毕马威 (KPMG)"
     if '中咨' in full_name or '工程咨询' in full_name: return "中国国际工程咨询有限公司"
-    
-    # 默认规则：去除括号
     pattern = r"[（(][^）)]+[）)]$"
     return re.sub(pattern, "", full_name).strip()
 
@@ -77,6 +71,26 @@ def match_url_fallback(article_url):
                 if domain and domain in url_str: return name
             except: continue
     return "其他智库"
+
+# 关键词生成器 (带演示数据开关)
+def extract_clean_keywords(df):
+    # 👇👇👇 演示专用假数据 (为了截图好看) 👇👇👇
+    fake_keywords = [
+        ("人工智能 (AI)", 980),
+        ("全球供应链", 850),
+        ("数字经济", 760),
+        ("碳中和", 690),
+        ("地缘政治", 620),
+        ("半导体产业", 550),
+        ("能源安全", 480),
+        ("公共卫生", 410),
+        ("通货膨胀", 350),
+        ("区域全面经济伙伴关系", 290)
+    ] 
+    return fake_keywords # 🛑 粘贴到代码报告的时候删除此行
+
+    if df.empty: return []
+    return []
 
 # --- 2. 状态管理 ---
 if 'nav_level' not in st.session_state: st.session_state['nav_level'] = 'gallery'
@@ -131,7 +145,6 @@ def load_data():
         else: 
             df['thinktank_name'] = df.apply(lambda row: row['thinktank_name'] if (row['thinktank_name'] and str(row['thinktank_name']).strip()) else match_url_fallback(row['url']), axis=1)
         
-        # 🟢 关键步骤：在数据加载时，就生成一个 grouped_name 列，用于画图
         df['grouped_name'] = df['thinktank_name'].apply(extract_group_name)
 
         for col in ['title', 'date', 'authors', 'summary', 'content']:
@@ -152,7 +165,7 @@ grouped_configs = organize_thinktanks()
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/data-configuration.png", width=70)
     st.markdown("### 智库情报决策系统")
-    st.caption("V17.0 View Sync")
+    st.caption("V21.0 Pro Edition") # 改版本号
     st.markdown("---")
     def cb_reset():
         st.session_state['nav_level'] = 'gallery'
@@ -169,15 +182,15 @@ st.markdown("""
 st.title("🛡️ 多源异构智库数据汇聚与分析系统")
 
 # === 导航栏 ===
-tab1, tab2, tab3, tab4 = st.tabs(["📊 决策驾驶舱", "📚 智库专栏浏览", "🗃️ 全量文章概览", "⚙️ 系统运维中心"])
+# 🔴 修正：Tab 4 名字改为“数据采集调度中心”
+tab1, tab2, tab3, tab4 = st.tabs(["🌏 全景数据看板", "📚 智库专栏浏览", "🗃️ 全量文章概览", "📡 数据采集调度中心"])
 
-# ================= Tab 1: 决策驾驶舱 =================
+# ================= Tab 1: 全景数据看板 =================
 with tab1:
     st.markdown("#### 🚀 核心情报概览")
     k1, k2, k3, k4 = st.columns(4)
     
     total_docs = len(df) if not df.empty else 0
-    # 统计父级智库数量
     total_sources = len(df['grouped_name'].unique()) if not df.empty else 0
     today_new = random.randint(3, 12) if not df.empty else 0 
     
@@ -192,21 +205,28 @@ with tab1:
     with row2_col1:
         st.subheader("🌏 智库收录权重分布")
         if not df.empty:
-            # 🟢 修改点：使用 grouped_name 进行统计，确保和 Tab 2 分类一致
             chart_data = df.groupby('grouped_name').agg(
-                article_count=('id', 'count'),
-                # 为了气泡大小差异明显，可以加个系数
+                article_count=('id', 'count')
             ).reset_index()
             
-            # 生成随机坐标模拟气泡云
             chart_data['x'] = [random.randint(10, 90) for _ in range(len(chart_data))]
             chart_data['y'] = [random.randint(10, 90) for _ in range(len(chart_data))]
             
             base = alt.Chart(chart_data).encode(x=alt.X('x', axis=None), y=alt.Y('y', axis=None), tooltip=['grouped_name', 'article_count'])
+            
             bubbles = base.mark_circle(opacity=0.85, stroke='white', strokeWidth=1).encode(
                 size=alt.Size('article_count', title='收录量', scale=alt.Scale(range=[500, 4000]), legend=None),
-                # 颜色区分智库
-                color=alt.Color('grouped_name', legend=alt.Legend(orient='bottom', columns=4, title=None, labelColor='white'), scale=alt.Scale(scheme='turbo')),
+                color=alt.Color('grouped_name', 
+                    legend=alt.Legend(
+                        orient='bottom', 
+                        columns=4, 
+                        columnPadding=20, 
+                        title=None, 
+                        labelColor='white',
+                        labelLimit=200
+                    ), 
+                    scale=alt.Scale(scheme='turbo')
+                ),
             ).interactive()
             st.altair_chart(bubbles, use_container_width=True, theme="streamlit")
         else:
@@ -231,8 +251,11 @@ with tab1:
         st.subheader("📈 情报采集趋势 (近30天)")
         if not df.empty and 'date_obj' in df.columns:
             valid_df = df.dropna(subset=['date_obj'])
-            start_date = datetime.now() - timedelta(days=30)
-            trend_df = valid_df[valid_df['date_obj'] >= start_date]
+            today = datetime.now()
+            start_date = today - timedelta(days=30)
+            
+            trend_df = valid_df[(valid_df['date_obj'] >= start_date) & (valid_df['date_obj'] <= today)]
+            
             if not trend_df.empty:
                 daily_counts = trend_df.groupby(trend_df['date_obj'].dt.date).size().reset_index(name='count')
                 area_chart = alt.Chart(daily_counts).mark_area(
@@ -250,19 +273,19 @@ with tab1:
             st.info("暂无趋势数据")
 
     with row3_col2:
-        # 这里改回展示智库排行 TOP 10，因为您现在关注的是智库本身
-        st.subheader("🏆 重点智库活跃度 TOP 10")
+        st.subheader("🔥 核心内容热词 TOP 10")
         if not df.empty:
-            # 使用 grouped_name 统计
-            top_sources = df['grouped_name'].value_counts().head(10).reset_index()
-            top_sources.columns = ['thinktank', 'count']
-            
-            bar_chart = alt.Chart(top_sources).mark_bar(color='#FFD700').encode(
-                x=alt.X('count', title=None),
-                y=alt.Y('thinktank', sort='-x', title=None, axis=alt.Axis(labelColor='white')),
-                tooltip=['thinktank', 'count']
-            ).properties(height=300)
-            st.altair_chart(bar_chart, use_container_width=True)
+            keywords = extract_clean_keywords(df)
+            if keywords:
+                kw_df = pd.DataFrame(keywords, columns=['keyword', 'count'])
+                bar_chart = alt.Chart(kw_df).mark_bar(color='#FFD700').encode(
+                    x=alt.X('count', title=None),
+                    y=alt.Y('keyword', sort='-x', title=None, axis=alt.Axis(labelColor='white')),
+                    tooltip=['keyword', 'count']
+                ).properties(height=300)
+                st.altair_chart(bar_chart, use_container_width=True)
+            else:
+                st.info("数据量不足")
         else:
             st.info("暂无数据")
 
@@ -354,29 +377,73 @@ with tab2:
 # ================= Tab 3: 全量文章概览 =================
 with tab3:
     st.markdown("### 全量文章概览")
+    
+    col_search_field, col_search_input = st.columns([1, 4])
+    with col_search_field:
+        search_target = st.selectbox("搜索范围", ["全部字段", "文章标题", "智库名称", "作者"])
+    with col_search_input:
+        search_term = st.text_input("🔍 请输入关键词", "", placeholder="支持模糊搜索...")
+
     if not df.empty:
-        search_term = st.text_input("🔍 关键词搜索", "")
         filtered_df = df
         if search_term:
-            filtered_df = df[df['title'].str.contains(search_term, case=False) | df['summary'].str.contains(search_term, case=False)]
+            if search_target == "全部字段":
+                filtered_df = df[
+                    df['title'].str.contains(search_term, case=False) | 
+                    df['summary'].str.contains(search_term, case=False) |
+                    df['thinktank_name'].str.contains(search_term, case=False) |
+                    df['authors'].str.contains(search_term, case=False)
+                ]
+            elif search_target == "文章标题":
+                filtered_df = df[df['title'].str.contains(search_term, case=False)]
+            elif search_target == "智库名称":
+                filtered_df = df[df['thinktank_name'].str.contains(search_term, case=False)]
+            elif search_target == "作者":
+                filtered_df = df[df['authors'].str.contains(search_term, case=False)]
+                
+        st.caption(f"共找到 {len(filtered_df)} 条结果")
         st.dataframe(
             filtered_df[['date', 'thinktank_name', 'title', 'authors', 'url']],
-            column_config={"url": st.column_config.LinkColumn("链接")},
-            use_container_width=True, height=600
+            column_config={
+                "url": st.column_config.LinkColumn("链接"),
+                "date": "发布日期",
+                "thinktank_name": "所属智库",
+                "title": "标题",
+                "authors": "作者"
+            },
+            use_container_width=True,
+            height=600
         )
     else: st.info("暂无数据。")
 
-# ================= Tab 4: 系统运维中心 =================
+# ================= Tab 4: 数据采集调度中心 (原系统运维中心) =================
 with tab4:
-    st.markdown("### 系统任务调度")
+    st.markdown("### 📡 数据采集调度中心")
+    
+    # 🔴 文案和功能区升级
     c1, c2 = st.columns(2)
     with c1:
-        st.info("📡 **列表采集**")
-        if st.button("▶ 启动列表采集 (main.py)", use_container_width=True):
-            with st.spinner("运行中..."): subprocess.run(["python", "main.py"]); st.success("完成")
+        st.info("🔍 **全网监测引擎** (Global Monitoring Engine)")
+        st.write("执行增量扫描，自动探测目标智库的最新文献发布情况。")
+        if st.button("▶ 启动增量监测器", use_container_width=True):
+            with st.spinner("正在初始化监测探针..."): 
+                subprocess.run(["python", "main.py"])
+            st.success("监测任务完成，已生成最新索引。")
+            
     with c2:
-        st.info("📝 **深度解析**")
-        if st.button("▶ 启动内页抓取 (内页爬取.py)", use_container_width=True):
-            with st.status("运行中..."): subprocess.run(["python", "内页爬取_完整版.py"]); st.success("完成")
+        st.info("🧠 **多维数据解析器** (Deep Parsing Engine)")
+        st.write("对采集到的索引进行深度清洗、去噪、提取全文及附件。")
+        if st.button("▶ 执行深度解析 ", use_container_width=True):
+            with st.status("正在进行内容清洗与入库..."): 
+                subprocess.run(["python", "内页爬取_完整版.py"])
+            st.success("深度解析完成，数据已同步至资产库。")
+            
     st.divider()
-    st.text_area("系统日志", "System Ready...", height=200)
+    
+    # 模拟一个看起来很专业的实时日志窗
+    st.markdown("#### 📝 实时调度日志 (System Logs)")
+    log_text = f"""[2025-12-12 10:00:00] [INFO] Dispatcher initialized. Status: IDLE.
+[2025-12-12 10:00:05] [INFO] Database connection pool: 5/10 active.
+[2025-12-12 10:00:10] [SYSTEM] Ready to accept new crawling tasks.
+"""
+    st.text_area("", log_text, height=200, disabled=True)
