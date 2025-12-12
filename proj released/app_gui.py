@@ -20,8 +20,8 @@ except ImportError:
     st.error("未找到 main.py，请确保 app_gui.py 和 main.py 在同一目录下。")
     URLData = {}
 
-# 设置页面
-st.set_page_config(page_title="智库情报决策系统", layout="wide", page_icon="🛡️", initial_sidebar_state="expanded")
+# 设置页面 (浏览器标签页标题)
+st.set_page_config(page_title="智界洞察", layout="wide", page_icon="🛡️", initial_sidebar_state="expanded")
 
 # --- 1. 辅助函数 ---
 def get_corrected_logo_path(relative_path_in_main):
@@ -164,8 +164,9 @@ grouped_configs = organize_thinktanks()
 # --- 4. 侧边栏 ---
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/data-configuration.png", width=70)
-    st.markdown("### 智库情报决策系统")
-    st.caption("V1.0 Edition") # 改版本号
+    st.markdown("### 智界洞察")
+    # 🟢 修改点：版本号改为 V1.0
+    st.caption("V1.0") 
     st.markdown("---")
     def cb_reset():
         st.session_state['nav_level'] = 'gallery'
@@ -179,10 +180,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ 多源异构智库数据汇聚与分析系统")
+# 主界面大标题
+st.title("🛡️ 智界洞察 —— 多源异构智库数据汇聚与分析系统")
 
 # === 导航栏 ===
-# 🔴 修正：Tab 4 名字改为“数据采集调度中心”
 tab1, tab2, tab3, tab4 = st.tabs(["🌏 全景数据看板", "📚 智库专栏浏览", "🗃️ 全量文章概览", "📡 数据采集调度中心"])
 
 # ================= Tab 1: 全景数据看板 =================
@@ -201,6 +202,7 @@ with tab1:
 
     st.markdown("---")
 
+    # 第一排：左边是智库排行（星云图），右边是实时日志
     row2_col1, row2_col2 = st.columns([2.2, 1])
     with row2_col1:
         st.subheader("🌏 智库收录权重分布")
@@ -246,6 +248,7 @@ with tab1:
             log_html = "<div style='font-family:monospace; font-size:0.85em; line-height:1.8;'>" + "<br>".join(logs) + "</div>"
             st.markdown(log_html, unsafe_allow_html=True)
 
+    # 第二排：左边是趋势图，右边是热词排行
     row3_col1, row3_col2 = st.columns([2.2, 1])
     with row3_col1:
         st.subheader("📈 情报采集趋势 (近30天)")
@@ -416,16 +419,17 @@ with tab3:
         )
     else: st.info("暂无数据。")
 
-# ================= Tab 4: 数据采集调度中心 (原系统运维中心) =================
+# ================= Tab 4: 数据采集调度中心 =================
 with tab4:
     st.markdown("### 📡 数据采集调度中心")
     
-    # 🔴 文案和功能区升级
+    # 🟢 修改点：文案去技术化
     c1, c2 = st.columns(2)
     with c1:
         st.info("🔍 **全网监测引擎** (Global Monitoring Engine)")
         st.write("执行增量扫描，自动探测目标智库的最新文献发布情况。")
-        if st.button("▶ 启动增量监测器", use_container_width=True):
+        # 🟢 按钮文案修改
+        if st.button("▶ 启动增量检测器", use_container_width=True):
             with st.spinner("正在初始化监测探针..."): 
                 subprocess.run(["python", "main.py"])
             st.success("监测任务完成，已生成最新索引。")
@@ -433,7 +437,8 @@ with tab4:
     with c2:
         st.info("🧠 **多维数据解析器** (Deep Parsing Engine)")
         st.write("对采集到的索引进行深度清洗、去噪、提取全文及附件。")
-        if st.button("▶ 执行深度解析 ", use_container_width=True):
+        # 🟢 按钮文案修改
+        if st.button("▶ 执行深度解析", use_container_width=True):
             with st.status("正在进行内容清洗与入库..."): 
                 subprocess.run(["python", "内页爬取_完整版.py"])
             st.success("深度解析完成，数据已同步至资产库。")
