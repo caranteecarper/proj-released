@@ -165,7 +165,7 @@ grouped_configs = organize_thinktanks()
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/data-configuration.png", width=70)
     st.markdown("### 智库情报决策系统")
-    st.caption("V21.0 Pro Edition") # 改版本号
+    st.caption("V1.0 Edition") # 改版本号
     st.markdown("---")
     def cb_reset():
         st.session_state['nav_level'] = 'gallery'
